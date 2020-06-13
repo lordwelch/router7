@@ -25,6 +25,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 	"time"
 
 	"github.com/gokrazy/gokrazy"
@@ -34,6 +35,8 @@ import (
 )
 
 var update = dyndns.Update
+
+var perm = flag.String("perm", "/perm", "path to replace /perm")
 
 type DynDNSRecord struct {
 	// TODO: multiple providers support
@@ -105,7 +108,7 @@ func main() {
 	var (
 		configFile = flag.String(
 			"config_file",
-			"/perm/dyndns.json",
+			path.Join(*perm, "/dyndns.json"),
 			"Path to the JSON configuration",
 		)
 

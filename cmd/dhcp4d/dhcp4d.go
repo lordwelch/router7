@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,14 +51,16 @@ import (
 	"github.com/rtr7/router7/internal/teelogger"
 )
 
-var iface = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
+var (
+	log              = teelogger.NewConsole()
+	nonExpiredLeases = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "non_expired_leases",
+		Help: "Number of non-expired DHCP leases",
+	})
 
-var log = teelogger.NewConsole()
-
-var nonExpiredLeases = promauto.NewGauge(prometheus.GaugeOpts{
-	Name: "non_expired_leases",
-	Help: "Number of non-expired DHCP leases",
-})
+	iface = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
+	perm  = flag.String("perm", "/perm", "path to replace /perm")
+)
 
 func updateNonExpired(leases []*dhcp4d.Lease) {
 	now := time.Now()
@@ -71,7 +74,7 @@ func updateNonExpired(leases []*dhcp4d.Lease) {
 	nonExpiredLeases.Set(float64(nonExpired))
 }
 
-var ouiDB = oui.NewDB("/perm/dhcp4d/oui")
+var ouiDB = oui.NewDB(path.Join(*perm, "/dhcp4d/oui"))
 
 var (
 	leasesMu sync.Mutex
@@ -218,7 +221,7 @@ func updateListeners() error {
 	if err != nil {
 		return err
 	}
-	if net1, err := multilisten.IPv6Net1("/perm"); err == nil {
+	if net1, err := multilisten.IPv6Net1(*perm); err == nil {
 		hosts = append(hosts, net1)
 	}
 
@@ -393,7 +396,7 @@ func newSrv(permDir string) (*srv, error) {
 			errs <- err
 		}
 		updateNonExpired(leases)
-		if err := notify.Process("/user/dnsd", syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "/dnsd"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying dnsd: %v", err)
 		}
 	}
@@ -422,7 +425,7 @@ func (s *srv) run(ctx context.Context) error {
 func main() {
 	// TODO: drop privileges, run as separate uid?
 	flag.Parse()
-	srv, err := newSrv("/perm")
+	srv, err := newSrv(*perm)
 	if err != nil {
 		log.Fatal(err)
 	}

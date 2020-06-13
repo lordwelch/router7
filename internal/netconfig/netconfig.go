@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -41,6 +42,8 @@ import (
 )
 
 var log = teelogger.NewConsole()
+
+var CmdRoot = "/user"
 
 func subnetMaskSize(mask string) (int, error) {
 	parts := strings.Split(mask, ".")
@@ -729,7 +732,7 @@ func applySysctl(ifname string) error {
 	return nil
 }
 
-func Apply(dir, root string) error {
+func Apply(dir, root string, firewall bool) error {
 
 	// TODO: split into two parts: delay the up until later
 	if err := applyInterfaces(dir, root); err != nil {
@@ -757,7 +760,7 @@ func Apply(dir, root string) error {
 		"backupd",  // listens on private IPv4/IPv6
 		"captured", // listens on private IPv4/IPv6
 	} {
-		if err := notify.Process("/user/"+process, syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(CmdRoot, process), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying %s: %v", process, err)
 		}
 	}
@@ -771,8 +774,10 @@ func Apply(dir, root string) error {
 		appendError(fmt.Errorf("sysctl: %v", err))
 	}
 
-	if err := applyFirewall(dir, ifname); err != nil {
-		appendError(fmt.Errorf("firewall: %v", err))
+	if firewall {
+		if err := applyFirewall(dir, ifname); err != nil {
+			appendError(fmt.Errorf("firewall: %v", err))
+		}
 	}
 
 	if err := applyWireGuard(dir); err != nil {

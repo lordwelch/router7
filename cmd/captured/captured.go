@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -38,6 +39,7 @@ import (
 )
 
 var (
+	perm        = flag.String("perm", "/perm", "path to replace /perm")
 	hostKeyPath = flag.String("host_key",
 		"/perm/breakglass.host_key",
 		"path to a PEM-encoded RSA, DSA or ECDSA private key (create using e.g. ssh-keygen -f /perm/breakglass.host_key -N '' -t rsa)")
@@ -149,6 +151,9 @@ func logic() error {
 
 func main() {
 	flag.Parse()
+	if *hostKeyPath == "/perm/breakglass.host_key" && *perm != "/perm" {
+		*hostKeyPath = strings.Replace(*hostKeyPath, "/perm", *perm, 1)
+	}
 	if err := logic(); err != nil {
 		log.Fatal(err)
 	}

@@ -16,6 +16,7 @@
 package main
 
 import (
+	"flag"
 	"net"
 	"net/http"
 	"os"
@@ -29,9 +30,12 @@ import (
 	"github.com/rtr7/router7/internal/teelogger"
 )
 
-var log = teelogger.NewConsole()
+var (
+	log           = teelogger.NewConsole()
+	httpListeners = multilisten.NewPool()
 
-var httpListeners = multilisten.NewPool()
+	perm = flag.String("perm", "/perm", "path to replace /perm")
+)
 
 func updateListeners() error {
 	hosts, err := gokrazy.PrivateInterfaceAddrs()
@@ -47,7 +51,7 @@ func updateListeners() error {
 
 func logic() error {
 	http.HandleFunc("/backup.tar.gz", func(w http.ResponseWriter, r *http.Request) {
-		if err := backup.Archive(w, "/perm"); err != nil {
+		if err := backup.Archive(w, *perm); err != nil {
 			log.Printf("backup.tar.gz: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
