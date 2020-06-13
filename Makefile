@@ -6,6 +6,15 @@ PKGS := github.com/rtr7/router7/cmd/... \
 	github.com/stapelberg/zkj-nas-tools/wolgw \
 	github.com/gokrazy/gdns
 
+build:
+	mkdir -p result
+	GOOS=linux go build -o ./result github.com/rtr7/router7/cmd/...
+	GOOS=linux go build -o ./result/rtr7-init -ldflags "-X main.buildTimestamp=$(shell date '+%Y-%m-%dT%H:%M:%S%z') -X github.com/gokrazy/gokrazy.httpPassword=temp" init/init.go
+
+clean:
+	rm -rf result
+	go clean -cache
+
 image:
 ifndef DIR
 	@echo variable DIR unset

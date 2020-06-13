@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"sync"
 	"syscall"
 
@@ -39,7 +40,9 @@ import (
 var log = teelogger.NewConsole()
 
 var (
-	linger = flag.Bool("linger", true, "linger around after applying the configuration (until killed)")
+	linger     = flag.Bool("linger", true, "linger around after applying the configuration (until killed)")
+	perm       = flag.String("perm", "/perm", "path to replace /perm")
+	noFirewall = flag.Bool("nofirewall", false, "disable the rtr7 firewall")
 )
 
 func init() {
@@ -114,7 +117,7 @@ func updateListeners() error {
 	if err != nil {
 		return err
 	}
-	if net1, err := multilisten.IPv6Net1("/perm"); err == nil {
+	if net1, err := multilisten.IPv6Net1(*perm); err == nil {
 		hosts = append(hosts, net1)
 	}
 
@@ -134,19 +137,18 @@ func logic() error {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGUSR1)
 	for {
-		err := netconfig.Apply("/perm/", "/")
+		err := netconfig.Apply(*perm, "/", !*noFirewall)
 
 		// Notify dhcp4d so that it can update its listeners for prometheus
 		// metrics on the external interface.
-		if err := notify.Process("/user/dhcp4d", syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "dhcp4d"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying dhcp4d: %v", err)
 		}
 
 		// Notify gokrazy about new addresses (netconfig.Apply might have
 		// modified state before returning an error) so that listeners can be
 		// updated.
-		p, _ := os.FindProcess(1)
-		if err := p.Signal(syscall.SIGHUP); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "rtr7-init"), syscall.SIGHUP); err != nil {
 			log.Printf("kill -HUP 1: %v", err)
 		}
 		if err != nil {
@@ -165,6 +167,7 @@ func logic() error {
 
 func main() {
 	flag.Parse()
+	netconfig.CmdRoot = path.Dir(os.Args[0])
 	if err := logic(); err != nil {
 		log.Fatal(err)
 	}

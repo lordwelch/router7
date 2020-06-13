@@ -18,8 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"path"
 	"time"
 )
+
+var Perm = "/perm"
 
 func leaseValid(fn string) (status string, _ error) {
 	var lease struct {
@@ -56,7 +59,7 @@ func (d *dhcpv4) Children() []Node {
 }
 
 func (d *dhcpv4) Evaluate() (string, error) {
-	return leaseValid("/perm/dhcp4/wire/lease.json")
+	return leaseValid(path.Join(Perm, "/dhcp4/wire/lease.json"))
 }
 
 // DHCPv4 returns a Node which succeeds if /perm/dhcp4/wire/lease.json contains
@@ -83,7 +86,7 @@ func (d *dhcpv6) Children() []Node {
 }
 
 func (d *dhcpv6) Evaluate() (string, error) {
-	return leaseValid("/perm/dhcp6/wire/lease.json")
+	return leaseValid(path.Join(Perm, "/dhcp6/wire/lease.json"))
 }
 
 // DHCPv6 returns a Node which succeeds if /perm/dhcp6/wire/lease.json contains

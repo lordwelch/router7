@@ -24,7 +24,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +45,7 @@ var log = teelogger.NewConsole()
 var (
 	netInterface = flag.String("interface", "uplink0", "network interface to operate on")
 	stateDir     = flag.String("state_dir", "/perm/dhcp4", "directory in which to store lease data (wire/lease.json) and last ACK (wire/ack)")
+	perm         = flag.String("perm", "/perm", "path to replace /perm")
 )
 
 func logic() error {
@@ -59,7 +62,7 @@ func logic() error {
 	// still use the old hardware address. We overwrite it with the address that
 	// netconfigd is going to use to fix this issue without additional
 	// synchronization.
-	details, err := netconfig.Interface("/perm", *netInterface)
+	details, err := netconfig.Interface(*perm, *netInterface)
 	if err == nil {
 		if spoof := details.SpoofHardwareAddr; spoof != "" {
 			if addr, err := net.ParseMAC(spoof); err == nil {
@@ -118,7 +121,7 @@ func logic() error {
 		if err := renameio.WriteFile(ackFn, buf.Bytes(), 0644); err != nil {
 			return fmt.Errorf("persisting DHCPACK to %s: %v", ackFn, err)
 		}
-		if err := notify.Process("/user/netconfigd", syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "/netconfigd"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying netconfig: %v", err)
 		}
 		select {
@@ -138,6 +141,9 @@ func logic() error {
 func main() {
 	// TODO: drop privileges, run as separate uid?
 	flag.Parse()
+	if *stateDir == "/perm/dhcp4" && *perm != "/perm" {
+		*stateDir = strings.Replace(*stateDir, "/perm", *perm, 1)
+	}
 	if err := logic(); err != nil {
 		log.Fatal(err)
 	}

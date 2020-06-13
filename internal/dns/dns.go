@@ -112,6 +112,7 @@ func NewServer(addr, domain string) *Server {
 	server.initHostsLocked()
 	server.Mux.HandleFunc(".", server.handleRequest)
 	server.Mux.HandleFunc("lan.", server.handleInternal)
+	server.Mux.HandleFunc(domain+".", server.handleInternal)
 	server.Mux.HandleFunc("localhost.", server.handleInternal)
 	go func() {
 		for range time.Tick(10 * time.Second) {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Binary radvd sends IPv6 router advertisments.
+// Binary radvd sends IPv6 router advertisements.
 package main
 
 import (
@@ -23,11 +23,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path"
 	"syscall"
 
 	"github.com/rtr7/router7/internal/dhcp6"
 	"github.com/rtr7/router7/internal/radvd"
 )
+
+var perm = flag.String("perm", "/perm", "path to replace /perm")
 
 func logic() error {
 	srv, err := radvd.NewServer()
@@ -35,7 +38,7 @@ func logic() error {
 		return err
 	}
 	readConfig := func() error {
-		b, err := ioutil.ReadFile("/perm/dhcp6/wire/lease.json")
+		b, err := ioutil.ReadFile(path.Join(*perm, "/dhcp6/wire/lease.json"))
 		if err != nil {
 			return err
 		}
@@ -45,7 +48,7 @@ func logic() error {
 		}
 
 		var additional []net.IPNet
-		if b, err := ioutil.ReadFile("/perm/radvd/prefixes.json"); err == nil {
+		if b, err := ioutil.ReadFile(path.Join(*perm, "/radvd/prefixes.json")); err == nil {
 			if err := json.Unmarshal(b, &additional); err != nil {
 				return err
 			}

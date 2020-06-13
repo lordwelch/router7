@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"syscall"
 
 	"github.com/gokrazy/gokrazy"
@@ -40,6 +41,9 @@ import (
 var (
 	httpListeners = multilisten.NewPool()
 	dnsListeners  = multilisten.NewPool()
+
+	perm   = flag.String("perm", "/perm", "path to replace /perm")
+	domain = flag.String("domain", "lan", "domain name for your network")
 )
 
 func updateListeners(mux *miekgdns.ServeMux) error {
@@ -56,7 +60,7 @@ func updateListeners(mux *miekgdns.ServeMux) error {
 		}}
 	})
 
-	if net1, err := multilisten.IPv6Net1("/perm"); err == nil {
+	if net1, err := multilisten.IPv6Net1(*perm); err == nil {
 		hosts = append(hosts, net1)
 	}
 
@@ -75,13 +79,13 @@ func (a *listenerAdapter) Close() error { return a.Shutdown() }
 
 func logic() error {
 	// TODO: set correct upstream DNS resolver(s)
-	ip, err := netconfig.LinkAddress("/perm", "lan0")
+	ip, err := netconfig.LinkAddress(*perm, "lan0")
 	if err != nil {
 		return err
 	}
-	srv := dns.NewServer(ip.String()+":53", "lan")
+	srv := dns.NewServer(ip.String()+":53", *domain)
 	readLeases := func() error {
-		b, err := ioutil.ReadFile("/perm/dhcp4d/leases.json")
+		b, err := ioutil.ReadFile(path.Join(*perm, "/dhcp4d/leases.json"))
 		if err != nil {
 			return err
 		}
