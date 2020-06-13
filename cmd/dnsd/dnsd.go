@@ -41,6 +41,8 @@ var (
 	httpListeners   = multilisten.NewPool()
 	dnsUDPListeners = multilisten.NewPool()
 	dnsTCPListeners = multilisten.NewPool()
+
+	domain = flag.String("domain", "lan", "domain name for your network")
 )
 
 func updateListeners(mux *miekgdns.ServeMux) error {
@@ -88,7 +90,7 @@ func logic() error {
 	if err != nil {
 		return err
 	}
-	srv := dns.NewServer(ip.String()+":53", "lan")
+	srv := dns.NewServer(ip.String()+":53", *domain)
 	readLeases := func() error {
 		b, err := ioutil.ReadFile("/perm/dhcp4d/leases.json")
 		if err != nil {

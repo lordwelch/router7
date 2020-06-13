@@ -46,12 +46,14 @@ import (
 
 	"github.com/rtr7/router7/internal/dhcp4d"
 	"github.com/rtr7/router7/internal/multilisten"
+	"github.com/rtr7/router7/internal/netconfig"
 	"github.com/rtr7/router7/internal/notify"
 	"github.com/rtr7/router7/internal/oui"
 	"github.com/rtr7/router7/internal/teelogger"
 )
 
 var iface = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
+var domain = flag.String("domain", "lan", "domain name for your network")
 
 var log = teelogger.NewConsole()
 
@@ -266,7 +268,27 @@ func newSrv(permDir string) (*srv, error) {
 	if err != nil {
 		return nil, err
 	}
-	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil)
+
+	serverIP, err := netconfig.LinkAddress("/perm", *iface)
+	if err != nil {
+		return nil, err
+	}
+	serverIP = serverIP.To4()
+	var domainSearch []byte
+	domainSearch, err = dhcp4d.CompressNames("lan.", *domain)
+	if err != nil {
+		return nil, err
+	}
+	options := dhcp4.Options{
+		dhcp4.OptionSubnetMask:                 []byte{255, 255, 255, 0},
+		dhcp4.OptionRouter:                     []byte(serverIP),
+		dhcp4.OptionDomainNameServer:           []byte(serverIP),
+		dhcp4.OptionNetworkTimeProtocolServers: []byte(serverIP),
+		dhcp4.OptionDomainName:                 []byte(*domain),
+		dhcp4.OptionDomainSearch:               domainSearch,
+	}
+
+	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil, options)
 	if err != nil {
 		return nil, err
 	}
