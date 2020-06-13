@@ -38,6 +38,8 @@ import (
 
 var httpListeners = multilisten.NewPool()
 
+var perm = flag.String("perm", "/perm", "path to replace /perm")
+
 func updateListeners() error {
 	hosts, err := gokrazy.PrivateInterfaceAddrs()
 	if err != nil {
@@ -134,6 +136,7 @@ func logic() error {
 
 func main() {
 	flag.Parse()
+	diag.Perm = *perm
 
 	if err := logic(); err != nil {
 		log.Fatal(err)

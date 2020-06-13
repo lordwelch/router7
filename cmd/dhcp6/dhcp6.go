@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -35,15 +36,17 @@ import (
 
 var log = teelogger.NewConsole()
 
+var perm = flag.String("perm", "/perm", "path to replace /perm")
+
 func logic() error {
-	const leasePath = "/perm/dhcp6/wire/lease.json"
+	leasePath := path.Join(*perm, "/dhcp6/wire/lease.json")
 	if err := os.MkdirAll(filepath.Dir(leasePath), 0755); err != nil {
 		return err
 	}
 
-	duid, err := ioutil.ReadFile("/perm/dhcp6/duid")
+	duid, err := ioutil.ReadFile(path.Join(*perm, "/dhcp6/duid"))
 	if err != nil {
-		log.Printf("could not read /perm/dhcp6/duid (%v), proceeding with DUID-LLT", err)
+		log.Printf("could not read %s (%v), proceeding with DUID-LLT", path.Join(*perm, "/dhcp6/duid"), err)
 	}
 
 	c, err := dhcp6.NewClient(dhcp6.ClientConfig{
@@ -78,10 +81,10 @@ func logic() error {
 		if err := renameio.WriteFile(leasePath, b, 0644); err != nil {
 			return err
 		}
-		if err := notify.Process("/user/netconfigd", syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "/netconfigd"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying netconfig: %v", err)
 		}
-		if err := notify.Process("/user/radvd", syscall.SIGUSR1); err != nil {
+		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "/radvd"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying radvd: %v", err)
 		}
 		select {
