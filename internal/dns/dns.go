@@ -44,9 +44,9 @@ var log = teelogger.NewConsole()
 type lcHostname string
 
 type IP struct {
-	IPv6 net.IP
-	IPv4 net.IP
-	Host lcHostname // lease that the IPs are updated from. If no lease exists for this host it is never updated.
+	IPv6 net.IP     `json:"ipv6"`
+	IPv4 net.IP     `json:"ipv4"`
+	Host lcHostname `json:"host"` // lease that the IPs are updated from. If no lease exists for this host it is never updated.
 }
 
 type Server struct {
