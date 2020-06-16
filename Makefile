@@ -9,7 +9,7 @@ PKGS := github.com/rtr7/router7/cmd/... \
 build:
 	mkdir -p result
 	GOOS=linux go build -o ./result github.com/rtr7/router7/cmd/...
-	GOOS=linux go build -o ./result/rtr7-init -ldflags "-X main.buildTimestamp=$(shell date '+%Y-%m-%dT%H:%M:%S%z') -X github.com/gokrazy/gokrazy.httpPassword=temp" init/init.go
+	GOOS=linux go build -o ./result/rtr7-init -ldflags "-X main.buildTimestamp=$(shell date '+%Y-%m-%dT%H:%M:%S%z') -X github.com/gokrazy/gokrazy.httpPassword=hello" init/init.go
 
 clean:
 	rm -rf result
