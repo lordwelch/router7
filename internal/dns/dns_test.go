@@ -576,9 +576,9 @@ func TestSubname(t *testing.T) {
 		}
 	})
 
-	setSubname := func(ip, remoteAddr string) {
+	setSubname := func(host, ip, remoteAddr string) {
 		val := url.Values{
-			"host": []string{"sub"},
+			"host": []string{host},
 			"ip":   []string{ip},
 		}
 		req := httptest.NewRequest("POST", "/dyndns", strings.NewReader(val.Encode()))
@@ -593,7 +593,7 @@ func TestSubname(t *testing.T) {
 		}
 	}
 	const ip = "fdf5:3606:2a21:1341:b26e:bfff:fe30:504b"
-	setSubname(ip, "192.168.42.23:1234")
+	setSubname("sub.testtarget", ip, "192.168.42.23:1234")
 
 	for _, name := range []string{
 		"sub.testtarget.lan.",
@@ -614,7 +614,7 @@ func TestSubname(t *testing.T) {
 		if err := resolveTestTarget(s, hostname+".lan.", net.ParseIP("127.0.0.2")); err != nil {
 			t.Fatal(err)
 		}
-		setSubname(ip, "127.0.0.2:1234")
+		setSubname("sub.turin", ip, "127.0.0.2:1234")
 		if err := resolveTestTarget(s, "sub."+hostname+".lan.", net.ParseIP(ip)); err != nil {
 			t.Fatal(err)
 		}
