@@ -94,6 +94,17 @@ func logic() error {
 			return err
 		}
 		srv.SetLeases(leases)
+
+		b, err = ioutil.ReadFile(path.Join(*perm, "/dns.json"))
+		if err != nil {
+			log.Printf("cannot read DNS entries: %v", err)
+			return nil
+		}
+		var dnsE []dns.IP
+		if err := json.Unmarshal(b, &dnsE); err != nil {
+			return nil
+		}
+		srv.SetDNSEntries(dnsE)
 		return nil
 	}
 	if err := readLeases(); err != nil {
