@@ -379,6 +379,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 		if err == errEmpty {
 			m := new(dns.Msg)
 			m.SetReply(r)
+			m.RecursionAvailable = true
 			w.WriteMsg(m)
 			return
 		}
@@ -387,6 +388,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	if rr != nil {
 		m := new(dns.Msg)
 		m.SetReply(r)
+		m.RecursionAvailable = true
 		m.Answer = append(m.Answer, rr)
 		w.WriteMsg(m)
 		return
@@ -394,6 +396,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	// Send an authoritative NXDOMAIN for local names:
 	m := new(dns.Msg)
 	m.SetReply(r)
+	m.RecursionAvailable = true
 	m.SetRcode(r, dns.RcodeNameError)
 	w.WriteMsg(m)
 }
@@ -501,6 +504,7 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 			if err == errEmpty {
 				m := new(dns.Msg)
 				m.SetReply(r)
+				m.RecursionAvailable = true
 				w.WriteMsg(m)
 				return
 			}
@@ -509,12 +513,14 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 		if rr != nil {
 			m := new(dns.Msg)
 			m.SetReply(r)
+			m.RecursionAvailable = true
 			m.Answer = append(m.Answer, rr)
 			w.WriteMsg(m)
 			return
 		}
 		// Send an authoritative NXDOMAIN for local names:
 		m := new(dns.Msg)
+		m.RecursionAvailable = true
 		m.SetReply(r)
 		m.SetRcode(r, dns.RcodeNameError)
 		w.WriteMsg(m)
