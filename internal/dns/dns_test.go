@@ -158,6 +158,28 @@ func TestResolveLatencySteering(t *testing.T) {
 	}
 }
 
+func TestDHCPDomain(t *testing.T) {
+	s := NewServer("localhost:0", "example.org")
+	s.SetLeases([]dhcp4d.Lease{
+		{
+			Hostname: "testtarget",
+			Addr:     net.IP{192, 168, 42, 23},
+		},
+	})
+
+	t.Run("testtarget.lan.", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.lan.", net.ParseIP("192.168.42.23")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget.example.org.", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.lan.", net.ParseIP("192.168.42.23")); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestDHCP(t *testing.T) {
 	r := &recorder{}
 	s := NewServer("localhost:0", "lan")

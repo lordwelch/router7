@@ -548,6 +548,7 @@ func (s *Server) resolveSubname(domain string, q dns.Question) (dns.RR, error) {
 	}
 	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA /*|| q.Qtype == dns.TypeMX*/ {
 		name := strings.TrimSuffix(q.Name, ".")
+		name = strings.TrimSuffix(name, ".lan")                                               // trim lan domain
 		name = strings.TrimSuffix(name, "."+string(s.domain))                                 // trim server domain
 		name = strings.TrimSuffix(name, "."+strings.TrimSuffix(domain, "."+string(s.domain))) // trim function domain
 		if ip, ok := s.subname(domain, name); ok {
