@@ -550,6 +550,7 @@ func (s *Server) resolveSubname(domain string, q dns.Question) (dns.RR, error) {
 		name := strings.TrimSuffix(q.Name, ".")
 		name = strings.TrimSuffix(name, "."+string(s.domain))                                 // trim server domain
 		name = strings.TrimSuffix(name, "."+strings.TrimSuffix(domain, "."+string(s.domain))) // trim function domain
+		name = strings.TrimSuffix(name, ".lan")                                               // trim function domain
 		if ip, ok := s.subname(domain, name); ok {
 			if q.Qtype == dns.TypeA && ip.IPv4.To4() != nil {
 				return dns.NewRR(q.Name + " 3600 IN A " + ip.IPv4.String())
