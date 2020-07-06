@@ -143,6 +143,11 @@ func NewServer(addr, domain string) *Server {
 }
 
 func (s *Server) initHostsLocked() {
+	for k := range s.subnames {
+		if k != s.domain {
+			s.Mux.HandleRemove(string(k))
+		}
+	}
 	s.hostsByName = make(map[lcHostname]string)
 	s.hostsByIP = make(map[string]string)
 	s.subnames[s.domain] = make(map[lcHostname]IP)
@@ -341,6 +346,15 @@ func (s *Server) SetDNSEntries(dnsEntries []IP) {
 			entry.Host = lcHostname(strings.TrimSuffix(dn, "lan")) + s.domain
 		}
 		s.setSubname(entry)
+		hdnSlice := strings.SplitN(string(entry.Host), ".", 2)
+		domain := lcHostname("")
+		if len(hdnSlice) == 2 {
+			domain = lcHostname(hdnSlice[1])
+		}
+		if domain == "" || domain == s.domain {
+			continue
+		}
+		s.Mux.HandleFunc(string(domain), s.subnameHandler(domain))
 	}
 }
 

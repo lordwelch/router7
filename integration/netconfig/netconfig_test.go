@@ -270,7 +270,7 @@ func TestNetconfig(t *testing.T) {
 		}
 
 		netconfig.DefaultCounterObj = &nftables.CounterObj{Packets: 23, Bytes: 42}
-		if err := netconfig.Apply(tmp, filepath.Join(tmp, "root")); err != nil {
+		if err := netconfig.Apply(tmp, filepath.Join(tmp, "root"), true); err != nil {
 			t.Fatalf("netconfig.Apply: %v", err)
 		}
 
@@ -278,7 +278,7 @@ func TestNetconfig(t *testing.T) {
 		// already-configured interfaces, addresses, routes, … (and ensure
 		// nftables rules are replaced, not appendend to).
 		netconfig.DefaultCounterObj = &nftables.CounterObj{Packets: 0, Bytes: 0}
-		if err := netconfig.Apply(tmp, filepath.Join(tmp, "root")); err != nil {
+		if err := netconfig.Apply(tmp, filepath.Join(tmp, "root"), true); err != nil {
 			t.Fatalf("netconfig.Apply: %v", err)
 		}
 

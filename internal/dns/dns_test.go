@@ -642,3 +642,93 @@ func TestSubname(t *testing.T) {
 		}
 	})
 }
+
+func TestDNSEntries(t *testing.T) {
+	r := &recorder{}
+	s := NewServer("127.0.0.2:0", "lan")
+	s.SetLeases([]dhcp4d.Lease{
+		{
+			Hostname: "testtarget",
+			Addr:     net.IP{192, 168, 42, 23},
+		},
+		{
+			Hostname: "testtarget-ipv6",
+			Addr:     net.ParseIP("fe80:3::"),
+		},
+	})
+	s.SetDNSEntries([]IP{
+		IP{
+			Host: "testtarget",
+			IPv4: net.IP{7, 7, 7, 7},
+			IPv6: net.ParseIP("fe80:1::"),
+		},
+		IP{
+			Host: "testtarget.example.org",
+			IPv4: net.IP{8, 8, 8, 8},
+			IPv6: net.ParseIP("fe80:2::"),
+		},
+		{
+			Host: "testtarget-ipv6",
+			IPv4: net.IP{9, 9, 9, 9},
+			IPv6: net.ParseIP("fe80:9::"),
+		},
+	})
+
+	t.Run("testtarget.", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.", net.IP{192, 168, 42, 23}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget.lan.", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.lan.", net.IP{192, 168, 42, 23}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget-ipv6.lan. (IPv6)", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget-ipv6.lan.", net.ParseIP("fe80:3::")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget-ipv6.lan. (no override???)", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget-ipv6.lan.", net.IP{9, 9, 9, 9}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget.lan. (IPv6) (no override???)", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.lan.", net.ParseIP("fe80:1::")); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget.example.org.", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.example.org.", net.IP{8, 8, 8, 8}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testtarget.example.org. (IPv6)", func(t *testing.T) {
+		if err := resolveTestTarget(s, "testtarget.example.org.", net.ParseIP("fe80:2::")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	s.SetLeases([]dhcp4d.Lease{
+		{
+			Hostname: "testtarget",
+			Addr:     net.IP{192, 168, 42, 23},
+		},
+	})
+
+	t.Run("testtarget.example.org. (deleted)", func(t *testing.T) {
+		m := new(dns.Msg)
+		m.SetQuestion("testtarget.example.org.", dns.TypeA)
+		s.Mux.ServeDNS(r, m)
+		if got, want := r.response.Rcode, dns.RcodeNameError; got != want {
+			t.Fatalf("unexpected rcode: got %v, want %v", got, want)
+		}
+	})
+
+}
