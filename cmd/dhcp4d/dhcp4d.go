@@ -46,6 +46,7 @@ import (
 
 	"github.com/rtr7/router7/internal/dhcp4d"
 	"github.com/rtr7/router7/internal/multilisten"
+	"github.com/rtr7/router7/internal/netconfig"
 	"github.com/rtr7/router7/internal/notify"
 	"github.com/rtr7/router7/internal/oui"
 	"github.com/rtr7/router7/internal/teelogger"
@@ -58,8 +59,9 @@ var (
 		Help: "Number of non-expired DHCP leases",
 	})
 
-	iface = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
-	perm  = flag.String("perm", "/perm", "path to replace /perm")
+	iface  = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
+	perm   = flag.String("perm", "/perm", "path to replace /perm")
+	domain = flag.String("domain", "lan", "domain name for your network")
 )
 
 func updateNonExpired(leases []*dhcp4d.Lease) {
@@ -259,7 +261,26 @@ func newSrv(permDir string) (*srv, error) {
 	if err != nil {
 		return nil, err
 	}
-	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil)
+
+	serverIP, err := netconfig.LinkAddress(permDir, *iface)
+	if err != nil {
+		return nil, err
+	}
+	var domainSearch []byte
+	domainSearch, err = dhcp4d.CompressNames("lan.", *domain)
+	if err != nil {
+		return nil, err
+	}
+	options := dhcp4.Options{
+		dhcp4.OptionSubnetMask:       []byte{255, 255, 255, 0},
+		dhcp4.OptionRouter:           []byte(serverIP),
+		dhcp4.OptionDomainNameServer: []byte(serverIP),
+		dhcp4.OptionTimeServer:       []byte(serverIP),
+		dhcp4.OptionDomainName:       []byte(*domain),
+		dhcp4.OptionDomainSearch:     domainSearch,
+	}
+
+	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil, options)
 	if err != nil {
 		return nil, err
 	}

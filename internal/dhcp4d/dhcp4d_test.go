@@ -95,6 +95,7 @@ func testHandler(t *testing.T) (_ *Handler, cleanup func()) {
 		},
 		"lan0",
 		&noopSink{},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

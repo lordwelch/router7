@@ -18,6 +18,7 @@ package dhcp4d
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -67,7 +68,7 @@ type Handler struct {
 	leasesIP map[int]*Lease
 }
 
-func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.PacketConn) (*Handler, error) {
+func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.PacketConn, options dhcp4.Options) (*Handler, error) {
 	serverIP, err := netconfig.LinkAddress(dir, ifaceName)
 	if err != nil {
 		return nil, err
@@ -84,10 +85,24 @@ func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.Pac
 			return nil, err
 		}
 	}
+	if options == nil {
+		var domainSearch []byte
+		domainSearch, err = CompressNames("lan.")
+		if err != nil {
+			return nil, err
+		}
+		options = dhcp4.Options{
+			dhcp4.OptionSubnetMask:       []byte{255, 255, 255, 0},
+			dhcp4.OptionRouter:           []byte(serverIP),
+			dhcp4.OptionDomainNameServer: []byte(serverIP),
+			dhcp4.OptionDomainName:       []byte("lan"),
+			dhcp4.OptionDomainSearch:     domainSearch,
+		}
+	}
 	serverIP = serverIP.To4()
 	start := make(net.IP, len(serverIP))
 	copy(start, serverIP)
-	start[len(start)-1] += 1
+	start[len(start)-1]++
 	return &Handler{
 		rawConn:     conn,
 		iface:       iface,
@@ -97,14 +112,8 @@ func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.Pac
 		start:       start,
 		leaseRange:  230,
 		LeasePeriod: 20 * time.Minute,
-		options: dhcp4.Options{
-			dhcp4.OptionSubnetMask:       []byte{255, 255, 255, 0},
-			dhcp4.OptionRouter:           []byte(serverIP),
-			dhcp4.OptionDomainNameServer: []byte(serverIP),
-			dhcp4.OptionDomainName:       []byte("lan"),
-			dhcp4.OptionDomainSearch:     []byte{0x03, 'l', 'a', 'n', 0x00},
-		},
-		timeNow: time.Now,
+		options:     options,
+		timeNow:     time.Now,
 	}, nil
 }
 
@@ -388,4 +397,79 @@ func (h *Handler) expireLease(hwAddr string) bool {
 	}
 	l.Expiry = time.Now()
 	return true
+}
+
+func CompressNames(names ...string) ([]byte, error) {
+	b := make([]byte, 0, 255)
+	m := make(map[string]int)
+	var err error
+	for _, name := range names {
+		if name[len(name)-1] != '.' {
+			name += "."
+		}
+		b, err = pack([]byte(name), b, m)
+		if err != nil {
+			return []byte{}, err
+		}
+	}
+	return b, nil
+}
+
+func pack(name []byte, msg []byte, compression map[string]int) ([]byte, error) {
+	oldMsg := msg
+
+	// Add a trailing dot to canonicalize name.
+	if len(name) == 0 || name[len(name)-1] != '.' {
+		return oldMsg, fmt.Errorf("%s", "errNonCanonicalName")
+	}
+
+	// Allow root domain.
+	if name[0] == '.' && len(name) == 1 {
+		return append(msg, 0), nil
+	}
+
+	// Emit sequence of counted strings, chopping at dots.
+	for i, begin := 0, 0; i < len(name); i++ {
+		// Check for the end of the segment.
+		if name[i] == '.' {
+			// The two most significant bits have special meaning.
+			// It isn't allowed for segments to be long enough to
+			// need them.
+			if i-begin >= 1<<6 {
+				return oldMsg, fmt.Errorf("%s", "errSegTooLong")
+			}
+
+			// Segments must have a non-zero length.
+			if i-begin == 0 {
+				return oldMsg, fmt.Errorf("%s", "errZeroSegLen")
+			}
+
+			msg = append(msg, byte(i-begin))
+
+			for j := begin; j < i; j++ {
+				msg = append(msg, name[j])
+			}
+
+			begin = i + 1
+			continue
+		}
+
+		// We can only compress domain suffixes starting with a new
+		// segment. A pointer is two bytes with the two most significant
+		// bits set to 1 to indicate that it is a pointer.
+		if (i == 0 || name[i-1] == '.') && compression != nil {
+			if ptr, ok := compression[string(name[i:])]; ok {
+				// Hit. Emit a pointer instead of the rest of
+				// the domain.
+				return append(msg, byte(ptr>>8|0xC0), byte(ptr)), nil
+			}
+
+			// Miss. Add the suffix to the compression table if the
+			// offset can be stored in the available 14 bytes.
+			if len(msg) <= int(^uint16(0)>>2) {
+				compression[string(name[i:])] = len(msg)
+			}
+		}
+	}
+	return append(msg, 0), nil
 }

@@ -36,7 +36,7 @@ func main() {
 		exec.Command(path.Join(cmdRoot, "backupd"), "-perm="+perm),
 		exec.Command(path.Join(cmdRoot, "captured"), "-perm="+perm),
 		exec.Command(path.Join(cmdRoot, "dhcp4"), "-perm="+perm),
-		exec.Command(path.Join(cmdRoot, "dhcp4d"), "-perm="+perm),
+		exec.Command(path.Join(cmdRoot, "dhcp4d"), fmt.Sprintf("-domain=%s", domain), "-perm="+perm),
 		exec.Command(path.Join(cmdRoot, "dhcp6"), "-perm="+perm),
 		exec.Command(path.Join(cmdRoot, "diagd"), "-perm="+perm),
 		exec.Command(path.Join(cmdRoot, "dnsd"), fmt.Sprintf("-domain=%s", domain), "-perm="+perm),
