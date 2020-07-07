@@ -45,7 +45,7 @@ func Process(name string, sig os.Signal) error {
 			}
 			return err
 		}
-		if !strings.HasPrefix(string(b), name) {
+		if !strings.Contains(string(b), name) {
 			continue
 		}
 		pid, _ := strconv.Atoi(fi.Name()) // already verified to be numeric

@@ -37,8 +37,8 @@ import (
 )
 
 type Lease struct {
-	Num              int       `json:"num"` // relative to Handler.start
-	Addr             net.IP    `json:"addr"`
+	Num              int       `json:"num"`  // relative to Handler.start
+	Addr             net.IP    `json:"addr"` // subnet.start+Num
 	HardwareAddr     string    `json:"hardware_addr"`
 	Hostname         string    `json:"hostname"`
 	HostnameOverride string    `json:"hostname_override"`
