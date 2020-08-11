@@ -266,6 +266,7 @@ func newSrv(permDir string) (*srv, error) {
 	if err != nil {
 		return nil, err
 	}
+	serverIP = serverIP.To4()
 	var domainSearch []byte
 	domainSearch, err = dhcp4d.CompressNames("lan.", *domain)
 	if err != nil {
