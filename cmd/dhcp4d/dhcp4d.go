@@ -273,12 +273,12 @@ func newSrv(permDir string) (*srv, error) {
 		return nil, err
 	}
 	options := dhcp4.Options{
-		dhcp4.OptionSubnetMask:       []byte{255, 255, 255, 0},
-		dhcp4.OptionRouter:           []byte(serverIP),
-		dhcp4.OptionDomainNameServer: []byte(serverIP),
-		dhcp4.OptionTimeServer:       []byte(serverIP),
-		dhcp4.OptionDomainName:       []byte(*domain),
-		dhcp4.OptionDomainSearch:     domainSearch,
+		dhcp4.OptionSubnetMask:                 []byte{255, 255, 255, 0},
+		dhcp4.OptionRouter:                     []byte(serverIP),
+		dhcp4.OptionDomainNameServer:           []byte(serverIP),
+		dhcp4.OptionNetworkTimeProtocolServers: []byte(serverIP),
+		dhcp4.OptionDomainName:                 []byte(*domain),
+		dhcp4.OptionDomainSearch:               domainSearch,
 	}
 
 	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil, options)
