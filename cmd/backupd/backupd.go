@@ -68,6 +68,7 @@ func logic() error {
 }
 
 func main() {
+	flag.Parse()
 	if err := logic(); err != nil {
 		log.Fatal(err)
 	}
