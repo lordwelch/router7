@@ -1,3 +1,5 @@
+bombur.narnian.us/git/lordwelch/gokrazy v0.0.0-20200822174213-684b7f10bbcc h1:8dSoG9r/UydbDre0bV/oWef5zkPZVTf2CuEITPgWXqU=
+bombur.narnian.us/git/lordwelch/gokrazy v0.0.0-20200822174213-684b7f10bbcc/go.mod h1:gg6WuqKqQT5Ty8vivqW/UUwyinbpjNpiaQJyAHDUquY=
 cloud.google.com/go v0.26.0 h1:e0WKqKTd5BnrG8aKH3J3h+QvEIQtSUcf2n5UZ5ZgLtQ=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
@@ -79,8 +81,6 @@ github.com/gogo/googleapis v1.1.0/go.mod h1:gf4bu3Q80BeJ6H1S1vYPm8/ELATdvryBaNFG
 github.com/gogo/protobuf v1.1.1/go.mod h1:r8qH/GZQm5c6nD/R0oafs1akxWv10x8SbQlK7atdtwQ=
 github.com/gogo/protobuf v1.2.0/go.mod h1:r8qH/GZQm5c6nD/R0oafs1akxWv10x8SbQlK7atdtwQ=
 github.com/gogo/protobuf v1.2.1/go.mod h1:hp+jE20tsWTFYpLwKvXlhS1hjn+gTNwPg2I6zVXpSg4=
-github.com/gokrazy/gokrazy v0.0.0-20200801074800-f7c3cb7e0e6a h1:p/pMUGI4GdWyQG6HfQPgIseILKAEpsGeVrhx2JCI7ns=
-github.com/gokrazy/gokrazy v0.0.0-20200801074800-f7c3cb7e0e6a/go.mod h1:MAXBdw3NnYx7LEQrgebujybMDDpROBGLpeeGxgz9KR4=
 github.com/gokrazy/internal v0.0.0-20200531194636-d96421c60091/go.mod h1:LA5TQy7LcvYGQOy75tkrYkFUhbV2nl5qEBP47PSi2JA=
 github.com/gokrazy/internal v0.0.0-20200713084155-ab6fc6e02a03 h1:H2GO8vfBaFo6msfPXPoY6KSqO1HmfDe0eiAc0LYKXOI=
 github.com/gokrazy/internal v0.0.0-20200713084155-ab6fc6e02a03/go.mod h1:LA5TQy7LcvYGQOy75tkrYkFUhbV2nl5qEBP47PSi2JA=
