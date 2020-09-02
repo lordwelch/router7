@@ -51,6 +51,8 @@ type Client struct {
 	timeNow      func() time.Time
 	generateXID  func() uint32
 
+	timeoutCount int
+
 	// last DHCPACK packet for renewal/release
 	Ack *layers.DHCPv4
 }
@@ -130,9 +132,11 @@ func (c *Client) ObtainOrRenew() bool {
 	if err != nil {
 		if errno, ok := err.(syscall.Errno); ok && errno == syscall.EAGAIN {
 			c.err = fmt.Errorf("DHCP: timeout (server(s) unreachable)")
+			c.timeoutCount++
 			return true // temporary error
 		}
-		if err == errNAK {
+		if err == errNAK || c.timeoutCount > 3 {
+			c.timeoutCount = 0
 			c.Ack = nil // start over at DHCPDISCOVER
 		}
 		c.err = fmt.Errorf("DHCP: %v", err)
