@@ -2,7 +2,7 @@ module github.com/rtr7/router7
 
 go 1.13
 
-replace github.com/gokrazy/gokrazy => bombur.narnian.us/git/lordwelch/gokrazy v0.0.0-20200822174213-684b7f10bbcc
+replace github.com/gokrazy/gokrazy => bombur.narnian.us/git/lordwelch/gokrazy v0.0.0-20200902065731-7b8bf9bc8266
 
 require (
 	github.com/andreyvit/diff v0.0.0-20170406064948-c7f18ee00883
