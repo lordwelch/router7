@@ -131,12 +131,21 @@ func (c *Client) ObtainOrRenew() bool {
 	ack, err := c.dhcpRequest()
 	if err != nil {
 		if errno, ok := err.(syscall.Errno); ok && errno == syscall.EAGAIN {
-			c.err = fmt.Errorf("DHCP: timeout (server(s) unreachable)")
+			var serverip net.IP
+			for _, opt := range c.Ack.Options {
+				if opt.Type == layers.DHCPOptServerID {
+					serverip = opt.Data
+				}
+			}
+			c.err = fmt.Errorf("DHCP: timeout (server(s) unreachable: %v)", serverip)
 			c.timeoutCount++
+			if c.timeoutCount > 3 {
+				c.timeoutCount = 0
+				c.Ack = nil // start over at DHCPDISCOVER
+			}
 			return true // temporary error
 		}
-		if err == errNAK || c.timeoutCount > 3 {
-			c.timeoutCount = 0
+		if err == errNAK {
 			c.Ack = nil // start over at DHCPDISCOVER
 		}
 		c.err = fmt.Errorf("DHCP: %v", err)
