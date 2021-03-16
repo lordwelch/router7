@@ -104,13 +104,17 @@ func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.Pac
 	copy(start, serverIP)
 	start[len(start)-1]++
 	return &Handler{
-		rawConn:     conn,
-		iface:       iface,
-		leasesHW:    make(map[string]int),
-		leasesIP:    make(map[int]*Lease),
-		serverIP:    serverIP,
-		start:       start,
-		leaseRange:  230,
+		rawConn:    conn,
+		iface:      iface,
+		leasesHW:   make(map[string]int),
+		leasesIP:   make(map[int]*Lease),
+		serverIP:   serverIP,
+		start:      start,
+		leaseRange: 230,
+		// Apple recommends a DHCP lease time of 1 hour in
+		// https://support.apple.com/de-ch/HT202068,
+		// so if 20 minutes ever causes any trouble,
+		// we should try increasing it to 1 hour.
 		LeasePeriod: 20 * time.Minute,
 		options:     options,
 		timeNow:     time.Now,
@@ -142,14 +146,18 @@ func (h *Handler) callLeasesLocked(lease *Lease) {
 	h.Leases(leases, lease)
 }
 
-func (h *Handler) SetHostname(hwaddr, hostname string) {
+func (h *Handler) SetHostname(hwaddr, hostname string) error {
 	h.leasesMu.Lock()
 	defer h.leasesMu.Unlock()
 	leaseNum := h.leasesHW[hwaddr]
 	lease := h.leasesIP[leaseNum]
+	if lease.HardwareAddr != hwaddr || lease.Expired(h.timeNow()) {
+		return fmt.Errorf("hwaddr %v does not have a valid lease", hwaddr)
+	}
 	lease.Hostname = hostname
 	lease.HostnameOverride = hostname
 	h.callLeasesLocked(lease)
+	return nil
 }
 
 func (h *Handler) findLease() int {

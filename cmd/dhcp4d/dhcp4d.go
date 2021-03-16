@@ -239,6 +239,8 @@ type srv struct {
 }
 
 func newSrv(permDir string) (*srv, error) {
+	mayqtt := MQTT()
+
 	http.Handle("/metrics", promhttp.Handler())
 	if err := updateListeners(); err != nil {
 		return nil, err
@@ -304,7 +306,10 @@ func newSrv(permDir string) (*srv, error) {
 			http.Error(w, "missing hostname parameter", http.StatusBadRequest)
 			return
 		}
-		handler.SetHostname(hwaddr, hostname)
+		if err := handler.SetHostname(hwaddr, hostname); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Redirect(w, r, "/", http.StatusFound)
 	})
 
@@ -420,6 +425,38 @@ func newSrv(permDir string) (*srv, error) {
 		updateNonExpired(leases)
 		if err := notify.Process(path.Join(path.Dir(os.Args[0]), "/dnsd"), syscall.SIGUSR1); err != nil {
 			log.Printf("notifying dnsd: %v", err)
+		}
+
+		// Publish the DHCP lease as JSON to MQTT, if configured:
+		leaseVal := struct {
+			Addr         string    `json:"addr"`
+			HardwareAddr string    `json:"hardware_addr"`
+			Expiration   time.Time `json:"expiration"`
+		}{
+			Addr:         latest.Addr.String(),
+			HardwareAddr: latest.HardwareAddr,
+			Expiration:   latest.Expiry.In(time.UTC),
+		}
+		leaseJSON, err := json.Marshal(leaseVal)
+		if err != nil {
+			log.Fatal(err)
+		}
+		// MQTT requires valid UTF-8 and some brokers don’t cope well with
+		// invalid UTF-8: https://github.com/fhmq/hmq/issues/104
+		identifier := strings.ToValidUTF8(latest.Hostname, "")
+		if identifier == "" {
+			identifier = latest.HardwareAddr
+		}
+		select {
+		case mayqtt <- PublishRequest{
+			Topic:    "router7/dhcp4d/lease/" + identifier,
+			Retained: true,
+			Payload:  leaseJSON,
+		}:
+		default:
+			// Channel not ready? skip publishing this lease (best-effort).
+			// This is an easy way of breaking circular dependencies between
+			// MQTT broker and DHCP server, and avoiding deadlocks.
 		}
 	}
 	conn, err := conn.NewUDP4BoundListener(*iface, ":67")

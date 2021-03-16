@@ -34,11 +34,11 @@ import (
 
 	"github.com/rtr7/router7/internal/diag"
 	"github.com/rtr7/router7/internal/multilisten"
+
+	_ "net/http/pprof"
 )
 
 var httpListeners = multilisten.NewPool()
-
-var perm = flag.String("perm", "/perm", "path to replace /perm")
 
 func updateListeners() error {
 	hosts, err := gokrazy.PrivateInterfaceAddrs()
@@ -81,10 +81,20 @@ func firstError(re *diag.EvalResult) string {
 }
 
 func logic() error {
+	var (
+		ifname = flag.String("interface",
+			"uplink0",
+			"interface name to query")
+		perm = flag.String("perm",
+			"/perm",
+			"path to replace /perm")
+	)
 	const (
-		uplink        = "uplink0" /* enp0s31f6 */
 		ip6allrouters = "ff02::2" // no /etc/hosts on gokrazy
 	)
+	flag.Parse()
+	uplink := *ifname
+	diag.Perm = *perm
 	m := diag.NewMonitor(diag.Link(uplink).
 		Then(diag.DHCPv4().
 			Then(diag.Ping4Gateway().
@@ -135,9 +145,6 @@ func logic() error {
 }
 
 func main() {
-	flag.Parse()
-	diag.Perm = *perm
-
 	if err := logic(); err != nil {
 		log.Fatal(err)
 	}
