@@ -548,7 +548,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			if in.Answer[0].Header().Rrtype == dns.TypeCNAME {
 				for _, rr := range in.Answer {
 					if rr.Header().Rrtype == dns.TypeA {
-						if newRR, err := s.resolveSubname("", dns.Question{strings.ToLower(rr.Header().Name), dns.TypeA, dns.ClassINET}); err != nil {
+						if newRR, err := s.resolveSubname("", dns.Question{strings.ToLower(rr.Header().Name), dns.TypeA, dns.ClassINET}); err == nil {
 							in.Answer[len(in.Answer)-1] = newRR
 						}
 					}
