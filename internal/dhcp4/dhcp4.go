@@ -52,6 +52,8 @@ type Client struct {
 	timeNow      func() time.Time
 	generateXID  func() uint32
 
+	timeoutCount int
+
 	// last DHCPACK packet for renewal/release
 	Ack *layers.DHCPv4
 }
@@ -129,7 +131,18 @@ func (c *Client) ObtainOrRenew() bool {
 	ack, err := c.dhcpRequest()
 	if err != nil {
 		if errno, ok := err.(syscall.Errno); ok && errno == syscall.EAGAIN {
-			c.err = fmt.Errorf("DHCP: timeout (server(s) unreachable)")
+			var serverip net.IP
+			for _, opt := range c.Ack.Options {
+				if opt.Type == layers.DHCPOptServerID {
+					serverip = opt.Data
+				}
+			}
+			c.err = fmt.Errorf("DHCP: timeout (server(s) unreachable: %v)", serverip)
+			c.timeoutCount++
+			if c.timeoutCount > 3 {
+				c.timeoutCount = 0
+				c.Ack = nil // start over at DHCPDISCOVER it has failed 3 times
+			}
 			return true // temporary error
 		}
 		if err == errNAK {
@@ -154,6 +167,7 @@ func (c *Client) ObtainOrRenew() bool {
 		}
 	}
 	c.cfg.RenewAfter = c.timeNow().Add(lease.RenewalTime)
+	c.timeoutCount = 0
 	return true
 }
 
