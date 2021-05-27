@@ -92,8 +92,8 @@ func NewServer(addr, domain string) *Server {
 			// https://developers.google.com/speed/public-dns/docs/using#google_public_dns_ip_addresses
 			"1.1.1.1:53",
 			"1.0.0.1:53",
-			"2606:4700:4700::1111:53",
-			"2606:4700:4700::1001:53",
+			"[2606:4700:4700::1111]:53",
+			"[2606:4700:4700::1001]:53",
 			"8.8.8.8:53",
 			"8.8.4.4:53",
 			"[2001:4860:4860::8888]:53",
@@ -536,37 +536,63 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	s.promInc("DNS", r)
 
-	for idx, u := range s.upstreams() {
-		in, _, err := s.client.Exchange(r, u)
-		if err != nil {
-			if s.sometimes.Allow() {
-				log.Printf("resolving %v failed: %v", r.Question, err)
+	if r.RecursionDesired {
+		for idx, u := range s.upstreams() {
+			in, _, err := s.client.Exchange(r, u)
+			if err != nil {
+				if s.sometimes.Allow() {
+					log.Printf("resolving %v failed: %v", r.Question, err)
+				}
+				continue // fall back to next-slower upstream
 			}
-			continue // fall back to next-slower upstream
-		}
-		if len(in.Answer) > 1 {
-			if in.Answer[0].Header().Rrtype == dns.TypeCNAME {
-				for i, rr := range in.Answer {
-					if rr != nil && rr.Header() != nil && rr.Header().Rrtype == dns.TypeA {
-						newRR, err := s.resolveSubname(string(s.domain), dns.Question{strings.ToLower(rr.Header().Name), dns.TypeA, dns.ClassINET})
-						if err == nil && newRR != nil {
-							in.Answer[i] = newRR
+			if len(in.Answer) > 1 {
+				if in.Answer[0].Header().Rrtype == dns.TypeCNAME {
+					for i, rr := range in.Answer {
+						if rr != nil && rr.Header() != nil && rr.Header().Rrtype == dns.TypeA {
+							newRR, err := s.resolveSubname(string(s.domain), dns.Question{strings.ToLower(rr.Header().Name), dns.TypeA, dns.ClassINET})
+							if err == nil && newRR != nil {
+								in.Answer[i] = newRR
+							}
 						}
 					}
 				}
 			}
-		}
-		w.WriteMsg(in)
-		if idx > 0 {
-			// re-order this upstream to the front of s.upstream.
-			s.upstreamMu.Lock()
-			// if the upstreams were reordered in the meantime leave them alone
-			if s.upstream[idx] == u {
-				s.upstream = append(append([]string{u}, s.upstream[:idx]...), s.upstream[idx+1:]...)
+			w.WriteMsg(in)
+			if idx > 0 {
+				// re-order this upstream to the front of s.upstream.
+				s.upstreamMu.Lock()
+				// if the upstreams were reordered in the meantime leave them alone
+				if s.upstream[idx] == u {
+					s.upstream = append(append([]string{u}, s.upstream[:idx]...), s.upstream[idx+1:]...)
+				}
+				s.upstreamMu.Unlock()
 			}
-			s.upstreamMu.Unlock()
+			return
 		}
-		return
+	} else {
+		for _, u := range s.upstreams() {
+			nr := r.Copy()
+			nr.Question[0].Qtype = dns.TypeSOA
+			nr.RecursionDesired = true
+			soa, _, err := s.client.Exchange(nr, u)
+			fmt.Println(err, soa)
+			fmt.Println()
+			fmt.Println(soa.Ns)
+
+			if len(soa.Ns) > 0 {
+				soa2 := soa.Ns[0].(*dns.SOA)
+				in, _, err := s.client.Exchange(r, strings.TrimRight(soa2.Ns, ".")+":53")
+				fmt.Println(err, in)
+				if err != nil {
+					if s.sometimes.Allow() {
+						log.Printf("resolving %v failed: %v", r.Question, err)
+					}
+					continue // fall back to next-slower upstream
+				}
+				w.WriteMsg(in)
+				return
+			}
+		}
 	}
 	// DNS has no reply for resolving errors
 }
