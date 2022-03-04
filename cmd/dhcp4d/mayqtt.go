@@ -24,11 +24,26 @@ func publisherLoop(requests <-chan PublishRequest) error {
 		}
 		return nil
 	}
+	var (
+		broker   string
+		username string
+		password string
+	)
+	cfg := strings.Split(string(b), "\n")
+
 	// e.g. tcp://10.0.0.54:1883, which is a static DHCP lease for the dr.lan
 	// Raspberry Pi, which is running an MQTT broker in my network.
-	broker := strings.TrimSpace(string(b))
+	broker = strings.TrimSpace(cfg[0])
+	if len(cfg) > 1 {
+		username = cfg[1]
+	}
+	if len(cfg) > 2 {
+		password = cfg[2]
+	}
 	log.Printf("Connecting to MQTT broker %q (configured in %s)", broker, configFn)
 	opts := mqtt.NewClientOptions().AddBroker(broker)
+	opts.SetUsername(username)
+	opts.SetPassword(password)
 	opts.SetClientID("dhcp4d")
 	opts.SetConnectRetry(true)
 	mqttClient := mqtt.NewClient(opts)
