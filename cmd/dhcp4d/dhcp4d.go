@@ -155,6 +155,8 @@ form {
 <th>Hostname</th>
 <th>MAC address</th>
 <th>Vendor</th>
+<th>VendorIdentifier</th>
+<th>Start</th>
 <th>Expiry</th>
 </tr>
 {{ range $idx, $l := . }}
@@ -171,6 +173,8 @@ form {
 </td>
 <td class="hwaddr">{{$l.HardwareAddr}}</td>
 <td>{{$l.Vendor}}</td>
+<td>{{$l.VendorIdentifier}}</td>
+<td>{{$l.Start}}</td>
 <td title="{{ timefmt $l.Expiry }}">
 {{ if $l.Expired }}
 {{ since $l.Expiry }}
@@ -183,6 +187,7 @@ form {
 <span class="active">active</span>
 {{ end }}
 {{ end }}
+
 </td>
 </tr>
 {{ end }}
