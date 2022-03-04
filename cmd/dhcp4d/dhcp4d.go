@@ -155,7 +155,9 @@ form {
 <th>Hostname</th>
 <th>MAC address</th>
 <th>Vendor</th>
+<th>VendorIdentifier</th>
 <th>Last ACK</th>
+<th>Expiry</th>
 </tr>
 {{ range $idx, $l := . }}
 <tr>
@@ -171,6 +173,7 @@ form {
 </td>
 <td class="hwaddr">{{$l.HardwareAddr}}</td>
 <td>{{$l.Vendor}}</td>
+<td>{{$l.VendorIdentifier}}</td>
 <td>
 {{ if (not (zero $l.LastACK)) }}
 {{ timefmt $l.LastACK }}
@@ -179,6 +182,18 @@ form {
 {{ end }}
 {{ if $l.Expired }}
 <span class="expired">expired</span>
+{{ end }}
+{{ end }}
+</td>
+<td>
+{{ if $l.Expired }}
+<span class="expired">expired</span>
+{{ else }}
+{{ if $l.Static }}
+<span class="static">static</span>
+{{ else }}
+{{ timefmt $l.Expiry }}
+<span class="active">active</span>
 {{ end }}
 {{ end }}
 </td>
@@ -437,13 +452,15 @@ func newSrv(permDir string) (*srv, error) {
 
 		// Publish the DHCP lease as JSON to MQTT, if configured:
 		leaseVal := struct {
-			Addr         string    `json:"addr"`
-			HardwareAddr string    `json:"hardware_addr"`
-			Expiration   time.Time `json:"expiration"`
+			Addr             string    `json:"addr"`
+			HardwareAddr     string    `json:"hardware_addr"`
+			Expiration       time.Time `json:"expiration"`
+			VendorIdentifier string    `json:"vendor_identifier"`
 		}{
-			Addr:         latest.Addr.String(),
-			HardwareAddr: latest.HardwareAddr,
-			Expiration:   latest.Expiry.In(time.UTC),
+			Addr:             latest.Addr.String(),
+			HardwareAddr:     latest.HardwareAddr,
+			Expiration:       latest.Expiry.In(time.UTC),
+			VendorIdentifier: latest.VendorIdentifier,
 		}
 		leaseJSON, err := json.Marshal(leaseVal)
 		if err != nil {

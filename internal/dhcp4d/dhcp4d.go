@@ -44,6 +44,7 @@ type Lease struct {
 	HostnameOverride string    `json:"hostname_override"`
 	Expiry           time.Time `json:"expiry"`
 	LastACK          time.Time `json:"last_ack"`
+	VendorIdentifier string    `json:"vendor"`
 }
 
 func (l *Lease) Expired(at time.Time) bool {
@@ -355,12 +356,13 @@ func (h *Handler) serveDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, options d
 		}
 
 		lease := &Lease{
-			Num:          leaseNum,
-			Addr:         make([]byte, 4),
-			HardwareAddr: hwAddr,
-			Expiry:       h.timeNow().Add(h.leasePeriodForDevice(hwAddr)),
-			Hostname:     string(options[dhcp4.OptionHostName]),
-			LastACK:      h.timeNow(),
+			Num:              leaseNum,
+			Addr:             make([]byte, 4),
+			HardwareAddr:     hwAddr,
+			Expiry:           h.timeNow().Add(h.leasePeriodForDevice(hwAddr)),
+			Hostname:         string(options[dhcp4.OptionHostName]),
+			LastACK:          h.timeNow(),
+			VendorIdentifier: string(bytes.ToValidUTF8(bytes.ReplaceAll(options[dhcp4.OptionVendorClassIdentifier], []byte{0}, []byte{}), []byte{})),
 		}
 		copy(lease.Addr, reqIP.To4())
 
