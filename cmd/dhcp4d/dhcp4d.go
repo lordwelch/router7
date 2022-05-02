@@ -435,13 +435,17 @@ func newSrv(permDir string) (*srv, error) {
 
 		// Publish the DHCP lease as JSON to MQTT, if configured:
 		leaseVal := struct {
-			Addr         string    `json:"addr"`
-			HardwareAddr string    `json:"hardware_addr"`
-			Expiration   time.Time `json:"expiration"`
+			Addr             string    `json:"addr"`
+			HardwareAddr     string    `json:"hardware_addr"`
+			Expiration       time.Time `json:"expiration"`
+			Start            time.Time `json:"start"`
+			VendorIdentifier string    `json:"vendor_identifier"`
 		}{
-			Addr:         latest.Addr.String(),
-			HardwareAddr: latest.HardwareAddr,
-			Expiration:   latest.Expiry.In(time.UTC),
+			Addr:             latest.Addr.String(),
+			HardwareAddr:     latest.HardwareAddr,
+			Expiration:       latest.Expiry.In(time.UTC),
+			Start:            latest.Start.In(time.UTC),
+			VendorIdentifier: latest.VendorIdentifier,
 		}
 		leaseJSON, err := json.Marshal(leaseVal)
 		if err != nil {
