@@ -97,6 +97,9 @@ var (
 			}
 			return dur.Truncate(1 * time.Second).String()
 		},
+		"zero": func(t time.Time) bool {
+			return t.IsZero()
+		},
 	}).Parse(`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
@@ -156,8 +159,8 @@ form {
 <th>MAC address</th>
 <th>Vendor</th>
 <th>VendorIdentifier</th>
-<th>Start</th>
 <th>Expiry</th>
+<th>Last ACK</th>
 </tr>
 {{ range $idx, $l := . }}
 <tr>
@@ -174,17 +177,14 @@ form {
 <td class="hwaddr">{{$l.HardwareAddr}}</td>
 <td>{{$l.Vendor}}</td>
 <td>{{$l.VendorIdentifier}}</td>
-<td>{{$l.Start}}</td>
 <td title="{{ timefmt $l.Expiry }}">
-{{ if $l.Expired }}
-{{ since $l.Expiry }}
-<span class="expired">expired</span>
-{{ else }}
-{{ if $l.Static }}
-<span class="static">static</span>
-{{ else }}
-{{ timefmt $l.Expiry }}
+{{ if (not (zero $l.LastACK)) }}
+{{ timefmt $l.LastACK }}
+{{ if $l.Active }}
 <span class="active">active</span>
+{{ end }}
+{{ if $l.Expired }}
+<span class="expired">expired</span>
 {{ end }}
 {{ end }}
 
@@ -193,10 +193,16 @@ form {
 {{ end }}
 {{ end }}
 
+<h1>Static Leases</h1>
 <table cellpadding="0" cellspacing="0">
 {{ template "table" .StaticLeases }}
+</table>
+
+<h1>Dynamic Leases</h1>
+<table cellpadding="0" cellspacing="0">
 {{ template "table" .DynamicLeases }}
 </table>
+
 </body>
 </html>
 `))
@@ -371,17 +377,20 @@ func newSrv(permDir string) (*srv, error) {
 			Vendor  string
 			Expired bool
 			Static  bool
+			Active  bool
 		}
 
 		leasesMu.Lock()
 		defer leasesMu.Unlock()
 		static := make([]tmplLease, 0, len(leases))
 		dynamic := make([]tmplLease, 0, len(leases))
+		now := time.Now()
 		tl := func(l *dhcp4d.Lease) tmplLease {
 			return tmplLease{
 				Lease:   *l,
 				Vendor:  ouiDB.Lookup(l.HardwareAddr[:8]),
-				Expired: l.Expired(time.Now()),
+				Expired: l.Expired(now),
+				Active:  l.Active(now),
 				Static:  l.Expiry.IsZero(),
 			}
 		}
@@ -444,7 +453,7 @@ func newSrv(permDir string) (*srv, error) {
 			Addr:             latest.Addr.String(),
 			HardwareAddr:     latest.HardwareAddr,
 			Expiration:       latest.Expiry.In(time.UTC),
-			Start:            latest.Start.In(time.UTC),
+			Start:            latest.LastACK.In(time.UTC),
 			VendorIdentifier: latest.VendorIdentifier,
 		}
 		leaseJSON, err := json.Marshal(leaseVal)
