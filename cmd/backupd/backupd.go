@@ -51,7 +51,7 @@ func updateListeners() error {
 
 func logic() error {
 	http.HandleFunc("/backup.tar.gz", func(w http.ResponseWriter, r *http.Request) {
-		if err := backup.Archive(w, *perm); err != nil {
+		if err := backup.Archive(w, *perm, flag.Args()); err != nil {
 			log.Printf("backup.tar.gz: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}

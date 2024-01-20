@@ -597,16 +597,24 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// DNS has no reply for resolving errors
 }
 
+func (s *Server) getSubname(domain string, queryName string) (IP,bool) {
+	name := strings.TrimSuffix(queryName, ".")
+	name = strings.TrimSuffix(name, ".lan")                                               // trim lan domain
+	name = strings.TrimSuffix(name, "."+string(s.domain))                                 // trim server domain
+	name = strings.TrimSuffix(name, "."+strings.TrimSuffix(domain, "."+string(s.domain))) // trim function domain
+	if ip, ok := s.subname(domain, name); ok {
+		return ip, true
+	}
+	return IP{},false
+}
+
 func (s *Server) resolveSubname(domain string, q dns.Question) (dns.RR, error) {
 	if q.Qclass != dns.ClassINET {
 		return nil, nil
 	}
+	ip,ok := s.getSubname(domain,q.Name)
 	if q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA /*|| q.Qtype == dns.TypeMX*/ {
-		name := strings.TrimSuffix(q.Name, ".")
-		name = strings.TrimSuffix(name, ".lan")                                               // trim lan domain
-		name = strings.TrimSuffix(name, "."+string(s.domain))                                 // trim server domain
-		name = strings.TrimSuffix(name, "."+strings.TrimSuffix(domain, "."+string(s.domain))) // trim function domain
-		if ip, ok := s.subname(domain, name); ok {
+		if ok {
 			if q.Qtype == dns.TypeA && ip.IPv4.To4() != nil {
 				return dns.NewRR(q.Name + " 3600 IN A " + ip.IPv4.String())
 			}
@@ -655,7 +663,7 @@ func (s *Server) subnameHandler(domain lcHostname) func(w dns.ResponseWriter, r 
 		}
 
 		// Send an authoritative NXDOMAIN for local names:
-		if r.Question[0].Qtype == dns.TypePTR || !strings.Contains(strings.TrimSuffix(r.Question[0].Name, "."), ".") || strings.HasSuffix(r.Question[0].Name, ".lan.") {
+		if _,ok := s.getSubname(string(domain),r.Question[0].Name);r.Question[0].Qtype == dns.TypePTR || (r.Question[0].Qtype == dns.TypeCNAME && ok) || !strings.Contains(strings.TrimSuffix(r.Question[0].Name, "."), ".") || strings.HasSuffix(r.Question[0].Name, ".lan.") {
 			s.promInc("local", r)
 			m := new(dns.Msg)
 			m.SetReply(r)

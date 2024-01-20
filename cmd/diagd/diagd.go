@@ -98,14 +98,14 @@ func logic() error {
 	m := diag.NewMonitor(diag.Link(uplink).
 		Then(diag.DHCPv4().
 			Then(diag.Ping4Gateway().
-				Then(diag.Ping4("google.ch").
-					Then(diag.TCP4("www.google.ch:80"))))).
+				Then(diag.Ping4("google.com").
+					Then(diag.TCP4("www.google.com:80"))))).
 		Then(diag.DHCPv6().
-			Then(diag.Ping6("lan0", "google.ch"))).
+			Then(diag.Ping6("lan0", "google.com"))).
 		Then(diag.RouterAdvertisments(uplink).
 			Then(diag.Ping6Gateway().
-				Then(diag.Ping6(uplink, "google.ch").
-					Then(diag.TCP6("www.google.ch:80"))))).
+				Then(diag.Ping6(uplink, "google.com").
+					Then(diag.TCP6("www.google.com:80"))))).
 		Then(diag.Ping6("", ip6allrouters+"%"+uplink)))
 	var mu sync.Mutex
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

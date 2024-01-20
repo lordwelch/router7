@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -718,7 +719,7 @@ func applyFirewall(dir, ifname string) error {
 
 	nat := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "nat",
+		Name:   "nat-gokrazy",
 	})
 
 	prerouting := c.AddChain(&nftables.Chain{
@@ -766,12 +767,12 @@ func applyFirewall(dir, ifname string) error {
 
 	filter4 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "filter",
+		Name:   "filter-gokrazy",
 	})
 
 	filter6 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv6,
-		Name:   "filter",
+		Name:   "filter-gokrazy",
 	})
 
 	for _, filter := range []*nftables.Table{filter4, filter6} {
@@ -1004,6 +1005,22 @@ func Apply(dir, root string, firewall bool) error {
 	if firewall {
 		if err := applyFirewall(dir, ifname); err != nil {
 			appendError(fmt.Errorf("firewall: %v", err))
+		}
+	} else {
+		if _, err := os.Stat("/user/nft"); err == nil {
+			log.Println("Applying custom firewall")
+			cmd := &exec.Cmd{
+				Path:   "/user/nft",
+				Args:   []string{"/user/nft", "-f/etc/firewall.nft"},
+				Env:    os.Environ(),
+				Stdout: os.Stdout,
+				Stderr: os.Stderr,
+			}
+			if err := cmd.Run(); err != nil {
+				appendError(fmt.Errorf("firewall: nft: %v", err))
+			}
+		} else {
+			log.Println("Firewall Disabled")
 		}
 	}
 
