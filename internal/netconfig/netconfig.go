@@ -33,6 +33,7 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/renameio"
+	"github.com/mdlayher/ethtool"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
@@ -63,7 +64,7 @@ func subnetMaskSize(mask string) (int, error) {
 	return ones, nil
 }
 
-func applyDhcp4(dir string) error {
+func applyDhcp4(dir string, cfg InterfaceConfig) error {
 	b, err := ioutil.ReadFile(filepath.Join(dir, "dhcp4/wire/lease.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -141,20 +142,85 @@ func applyDhcp4(dir string) error {
 		return fmt.Errorf("RouteReplace(router): %v", err)
 	}
 
-	if err := h.RouteReplace(&netlink.Route{
-		LinkIndex: link.Attrs().Index,
-		Dst: &net.IPNet{
-			IP:   net.ParseIP("0.0.0.0"),
-			Mask: net.CIDRMask(0, 32),
-		},
-		Gw:       net.ParseIP(got.Router),
-		Src:      net.ParseIP(got.ClientIP),
-		Protocol: RTPROT_DHCP,
-	}); err != nil {
-		return fmt.Errorf("RouteReplace(default): %v", err)
+	if defaultViaWireguard(cfg) {
+		// The default route is on a WireGuard interface, so do not install the
+		// default route from the DHCP reply. Instead, set up a host route for
+		// the WireGuard endpoint(s).
+
+		log.Printf("IPv4 traffic is routed via WireGuard, setting host route instead of default route")
+
+		b, err := ioutil.ReadFile(filepath.Join(dir, "wireguard.json"))
+		if err != nil {
+			return err
+		}
+		var wgcfg wireguardInterfaces
+		if err := json.Unmarshal(b, &wgcfg); err != nil {
+			return err
+		}
+
+		for _, iface := range wgcfg.Interfaces {
+			for _, p := range iface.Peers {
+				addr, err := net.ResolveUDPAddr("udp", p.Endpoint)
+				if err != nil {
+					return err
+				}
+
+				log.Printf("  WireGuard endpoint %s", addr.IP)
+
+				router := net.ParseIP(got.Router)
+				if addr.IP.Equal(router) {
+					continue // endpoint == router, no route required
+				}
+
+				if err := h.RouteReplace(&netlink.Route{
+					LinkIndex: link.Attrs().Index,
+					Dst: &net.IPNet{
+						IP:   addr.IP,
+						Mask: net.CIDRMask(32, 32),
+					},
+					Gw:       net.ParseIP(got.Router),
+					Src:      net.ParseIP(got.ClientIP),
+					Protocol: RTPROT_DHCP,
+				}); err != nil {
+					return fmt.Errorf("RouteReplace(default): %v", err)
+				}
+			}
+		}
+	} else {
+		if err := h.RouteReplace(&netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst: &net.IPNet{
+				IP:   net.ParseIP("0.0.0.0"),
+				Mask: net.CIDRMask(0, 32),
+			},
+			Gw:       net.ParseIP(got.Router),
+			Src:      net.ParseIP(got.ClientIP),
+			Protocol: RTPROT_DHCP,
+		}); err != nil {
+			return fmt.Errorf("RouteReplace(default): %v", err)
+		}
 	}
 
 	return nil
+}
+
+func defaultViaWireguard(cfg InterfaceConfig) bool {
+	for _, iface := range cfg.Interfaces {
+		if !strings.HasPrefix(iface.Name, "wg") {
+			continue
+		}
+		for _, route := range iface.ExtraRoutes {
+			_, n, err := net.ParseCIDR(route.Destination)
+			if err != nil {
+				continue
+			}
+			ones, bits := n.Mask.Size()
+			if n.IP.Equal(net.IPv4zero) && ones == 0 && bits == 32 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func applyDhcp6(dir string) error {
@@ -195,11 +261,26 @@ func applyDhcp6(dir string) error {
 	return nil
 }
 
+type Route struct {
+	Destination string `json:"destination"` // e.g. 2a02:168:4a00:22::/64
+	Gateway     string `json:"gateway"`     // e.g. fe80::1
+}
+
 type InterfaceDetails struct {
-	HardwareAddr      string `json:"hardware_addr"`       // e.g. dc:9b:9c:ee:72:fd
-	SpoofHardwareAddr string `json:"spoof_hardware_addr"` // e.g. dc:9b:9c:ee:72:fd
-	Name              string `json:"name"`                // e.g. uplink0, or lan0
-	Addr              string `json:"addr"`                // e.g. 192.168.42.1/24
+	HardwareAddr      string   `json:"hardware_addr"`       // e.g. dc:9b:9c:ee:72:fd
+	SpoofHardwareAddr string   `json:"spoof_hardware_addr"` // e.g. dc:9b:9c:ee:72:fd
+	Name              string   `json:"name"`                // e.g. uplink0, or lan0
+	Addr              string   `json:"addr"`                // e.g. 192.168.42.1/24
+	ExtraAddrs        []string `json:"extra_addrs"`         // e.g. ["192.168.23.1/24"]
+	ExtraRoutes       []Route  `json:"extra_routes"`
+	MTU               int      `json:"mtu"` // e.g. 1492 for PPPoE connections
+	// FEC optionally allows configuring forward error correction, e.g. RS for
+	// reed-solomon forward error correction, or Off to disable.
+	//
+	// Some network card and SFP module combinations (e.g. Mellanox ConnectX-4
+	// with a Flexoptix P.B1625G.10.AD) need to explicitly be configured to use
+	// RS forward error correction, otherwise they won’t link.
+	FEC string `json:"fec"`
 }
 
 type BridgeDetails struct {
@@ -302,18 +383,64 @@ func applyBridges(cfg *InterfaceConfig) error {
 	return nil
 }
 
-func applyInterfaces(dir, root string) error {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "interfaces.json"))
+func applyInterfaceFEC(details InterfaceDetails) error {
+	if details.FEC == "" {
+		return nil // nothing to do
+	}
+
+	desired := ethtool.FECModes(unix.ETHTOOL_FEC_RS)
+	switch strings.ToLower(details.FEC) {
+	case "rs":
+		desired = unix.ETHTOOL_FEC_RS
+	case "baser":
+		desired = unix.ETHTOOL_FEC_BASER
+	case "off":
+		desired = unix.ETHTOOL_FEC_OFF
+	case "none":
+		desired = unix.ETHTOOL_FEC_NONE
+	case "llrs":
+		desired = unix.ETHTOOL_FEC_LLRS
+	case "auto":
+		desired = 0
+	default:
+		return fmt.Errorf("unknown FEC value %q, expected one of RS, BaseR, LLRS, Auto, None, Off", details.FEC)
+	}
+
+	cl, err := ethtool.New()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
-	var cfg InterfaceConfig
-	if err := json.Unmarshal(b, &cfg); err != nil {
+	defer cl.Close()
+
+	li, err := cl.LinkInfo(ethtool.Interface{Name: details.Name})
+	if err != nil {
+		return fmt.Errorf("LinkInfo(%s): %v", details.Name, err)
+	}
+
+	fec, err := cl.FEC(li.Interface)
+	if err != nil {
+		return fmt.Errorf("FEC(%s): %v", li.Interface.Name, err)
+	}
+	log.Printf("FEC supported/configured: [%v], active: %v", fec.Supported(), fec.Active)
+	// fec.Active is not set when there is no link, so we compare
+	// supported/configured instead.
+	if fec.Supported() == desired {
+		return nil // already matching the desired configuration
+	}
+
+	log.Printf("setting FEC to %v", desired)
+	if err := cl.SetFEC(ethtool.FEC{
+		Interface: li.Interface,
+		Modes:     desired,
+		Auto:      strings.ToLower(details.FEC) == "auto",
+	}); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func applyInterfaces(dir, root string, cfg InterfaceConfig) error {
 	byName := make(map[string]InterfaceDetails)
 	byHardwareAddr := make(map[string]InterfaceDetails)
 	for _, details := range cfg.Interfaces {
@@ -365,6 +492,12 @@ func applyInterfaces(dir, root string) error {
 			attr.Name = details.Name
 		}
 
+		if details.MTU != 0 {
+			if err := netlink.LinkSetMTU(l, details.MTU); err != nil {
+				return fmt.Errorf("LinkSetMTU(%d): %v", details.MTU, err)
+			}
+		}
+
 		if spoof := details.SpoofHardwareAddr; spoof != "" {
 			hwaddr, err := net.ParseMAC(spoof)
 			if err != nil {
@@ -373,6 +506,11 @@ func applyInterfaces(dir, root string) error {
 			if err := netlink.LinkSetHardwareAddr(l, hwaddr); err != nil {
 				return fmt.Errorf("LinkSetHardwareAddr(%v): %v", hwaddr, err)
 			}
+		}
+
+		if err := applyInterfaceFEC(details); err != nil {
+			// TODO: turn this into returning an error once proven stable
+			log.Printf("applyInterfaceFEC: %v", err)
 		}
 
 		if attr.OperState != netlink.OperUp {
@@ -401,6 +539,36 @@ func applyInterfaces(dir, root string) error {
 				if err := renameio.WriteFile(fn, b, 0644); err != nil {
 					return err
 				}
+			}
+		}
+
+		for _, addr := range details.ExtraAddrs {
+			log.Printf("replacing extra address %v on %v", addr, attr.Name)
+			addr, err := netlink.ParseAddr(addr)
+			if err != nil {
+				return fmt.Errorf("ParseAddr(%q): %v", addr, err)
+			}
+
+			if err := netlink.AddrReplace(l, addr); err != nil {
+				return fmt.Errorf("AddrReplace(%s, %v): %v", attr.Name, addr, err)
+			}
+		}
+
+		for _, route := range details.ExtraRoutes {
+			_, dst, err := net.ParseCIDR(route.Destination)
+			if err != nil {
+				return fmt.Errorf("ParseCIDR(%q): %v", route.Destination, err)
+			}
+			r := &netlink.Route{Dst: dst}
+			if route.Gateway != "" {
+				r.Gw = net.ParseIP(route.Gateway)
+			}
+			r.LinkIndex = attr.Index
+
+			log.Printf("replacing extra route %v on %v", r, attr.Name)
+
+			if err := netlink.RouteReplace(r); err != nil {
+				return fmt.Errorf("RouteReplace(%v): %v", r, err)
 			}
 		}
 	}
@@ -944,6 +1112,8 @@ func applySysctl(ifname string) error {
 	sysctls := []string{
 		"net.ipv4.ip_forward=1",
 		"net.ipv6.conf.all.forwarding=1",
+		"net.ipv4.icmp_ratelimit=0",
+		"net.ipv6.icmp.ratelimit=0",
 	}
 	if ifname != "" {
 		sysctls = append(sysctls, "net.ipv6.conf."+ifname+".accept_ra=2")
@@ -961,10 +1131,20 @@ func applySysctl(ifname string) error {
 }
 
 func Apply(dir, root string, firewall bool) error {
+	var cfg InterfaceConfig
+	b, err := ioutil.ReadFile(filepath.Join(dir, "interfaces.json"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil || os.IsNotExist(err) {
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			return err
+		}
 
-	// TODO: split into two parts: delay the up until later
-	if err := applyInterfaces(dir, root); err != nil {
-		return fmt.Errorf("interfaces: %v", err)
+		// TODO: split apply into two parts: delay the up until later
+		if err := applyInterfaces(dir, root, cfg); err != nil {
+			return fmt.Errorf("interfaces: %v", err)
+		}
 	}
 
 	var errors []error
@@ -973,7 +1153,7 @@ func Apply(dir, root string, firewall bool) error {
 		log.Println(err)
 	}
 
-	if err := applyDhcp4(dir); err != nil {
+	if err := applyDhcp4(dir, cfg); err != nil {
 		appendError(fmt.Errorf("dhcp4: %v", err))
 	}
 

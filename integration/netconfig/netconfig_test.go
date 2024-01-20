@@ -28,6 +28,7 @@ import (
 
 	"github.com/rtr7/router7/internal/netconfig"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 
 	"github.com/andreyvit/diff"
 	"github.com/google/go-cmp/cmp"
@@ -45,11 +46,21 @@ const goldenInterfaces = `
       "hardware_addr": "02:73:53:00:b0:0c",
       "spoof_hardware_addr": "02:73:53:00:b0:aa",
       "name": "lan0",
-      "addr": "192.168.42.1/24"
+      "addr": "192.168.42.1/24",
+      "mtu": 1492
     },
     {
       "name": "wg0",
-      "addr": "fe80::1/64"
+      "addr": "fe80::1/64",
+      "extra_addrs": [
+        "10.22.100.1/24"
+      ],
+      "extra_routes": [
+        {
+          "destination": "2a02:168:4a00:22::/64",
+          "gateway": "fe80::2"
+        }
+      ]
     }
   ]
 }
@@ -239,19 +250,24 @@ const goldenDhcp6 = `
 }
 `
 
-type wgLink struct{}
+type wgLink struct {
+	ns int
+}
 
 func (w *wgLink) Type() string { return "wireguard" }
 
 func (w *wgLink) Attrs() *netlink.LinkAttrs {
 	attrs := netlink.NewLinkAttrs()
 	attrs.Name = "wg5"
+	if w.ns > 0 {
+		attrs.Namespace = netlink.NsFd(w.ns)
+	}
 	return &attrs
 }
 
 var wireGuardAvailable = func() bool {
 	// The wg tool must also be available for our test to succeed:
-	if _, err := exec.LookPath("wg"); err == nil {
+	if _, err := exec.LookPath("wg"); err != nil {
 		return false
 	}
 
@@ -265,7 +281,18 @@ var wireGuardAvailable = func() bool {
 	}
 	defer exec.Command("ip", "netns", "delete", ns).Run()
 
-	return netlink.LinkAdd(&wgLink{}) == nil
+	nsHandle, err := netns.GetFromName(ns)
+	if err != nil {
+		log.Printf("GetFromName: %v", err)
+		return false
+	}
+
+	if err := netlink.LinkAdd(&wgLink{ns: int(nsHandle)}); err != nil {
+		log.Printf("netlink.LinkAdd: %v", err)
+		return false
+	}
+
+	return true
 }()
 
 func TestNetconfig(t *testing.T) {
@@ -367,6 +394,9 @@ func TestNetconfig(t *testing.T) {
 		if !strings.Contains(string(link), "link/ether 02:73:53:00:b0:aa") {
 			t.Errorf("lan0 MAC address is not 02:73:53:00:b0:aa")
 		}
+		if !strings.Contains(string(link), " mtu 1492 ") {
+			t.Errorf("lan0 MTU is not 1492 (link: %q)", string(link))
+		}
 
 		addrs, err := exec.Command("ip", "-netns", ns, "address", "show", "dev", "uplink0").Output()
 		if err != nil {
@@ -444,9 +474,25 @@ peer: AVU3LodtnFaFnJmMyNNW7cUk4462lqnVULTFkjWYvRo=
 		if !upRe.MatchString(string(out)) {
 			t.Errorf("regexp %s does not match %s", upRe, string(out))
 		}
+
+		addr4Re := regexp.MustCompile(`(?m)^\s*inet 10.22.100.1/24 brd 10.22.100.255 scope global wg0\s*$`)
+		if !addr4Re.MatchString(string(out)) {
+			t.Errorf("regexp %s does not match %s", addr4Re, string(out))
+		}
+
 		addr6Re := regexp.MustCompile(`(?m)^\s*inet6 fe80::1/64 scope link\s*$`)
 		if !addr6Re.MatchString(string(out)) {
 			t.Errorf("regexp %s does not match %s", addr6Re, string(out))
+		}
+
+		out, err = exec.Command("ip", "-netns", ns, "-6", "route", "show", "dev", "wg0").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		extraRouteRe := regexp.MustCompile(`(?m)^\s*2a02:168:4a00:22::/64 via fe80::2 metric 1024 pref medium\s*$`)
+		if !extraRouteRe.MatchString(string(out)) {
+			t.Errorf("regexp %s does not match %s", extraRouteRe, string(out))
 		}
 
 	})
