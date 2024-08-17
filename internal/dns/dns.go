@@ -90,14 +90,16 @@ func NewServer(addr, domain string) *Server {
 		domain: lcHostname(strings.ToLower(domain)),
 		upstream: []string{
 			// https://developers.google.com/speed/public-dns/docs/using#google_public_dns_ip_addresses
-			"1.1.1.1:53",
-			"1.0.0.1:53",
-			"[2606:4700:4700::1111]:53",
-			"[2606:4700:4700::1001]:53",
-			"8.8.8.8:53",
-			"8.8.4.4:53",
-			"[2001:4860:4860::8888]:53",
-			"[2001:4860:4860::8844]:53",
+			"45.90.28.26:53",
+			"45.90.30.26:53",
+			"[2a07:a8c0::54:f68e]:53",
+			"[2a07:a8c1::54:f68e]:53",
+			"194.242.2.4:53",
+			"[2a07:e340::4]:52",
+			"94.140.14.14:53",
+			"94.140.15.15:53",
+			"[2a10:50c0::ad1:ff]:53",
+			"[2a10:50c0::ad2:ff]:53",
 		},
 		sometimes: rate.NewLimiter(rate.Every(1*time.Second), 1), // at most once per second
 		hostname:  hostname,
@@ -575,7 +577,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			nr.Question[0].Qtype = dns.TypeSOA
 			nr.RecursionDesired = true
 			soa, _, err := s.client.Exchange(nr, u)
-			fmt.Println(err, soa)
+			fmt.Println(w.RemoteAddr(), err, soa)
 			fmt.Println()
 			fmt.Println(soa.Ns)
 
