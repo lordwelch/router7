@@ -1241,13 +1241,15 @@ func Apply(dir, root string, firewall bool) error {
 			log.Println("Applying custom firewall")
 			cmd := &exec.Cmd{
 				Path:   "/user/nft",
-				Args:   []string{"/user/nft", "-f/etc/firewall.nft"},
-				Env:    os.Environ(),
+				Args:   []string{"/user/nft", "-ef", "/etc/firewall.nft"},
+				Env:    cleanEnviron(os.Environ()),
 				Stdout: os.Stdout,
 				Stderr: os.Stderr,
 			}
 			if err := cmd.Run(); err != nil {
 				appendError(fmt.Errorf("firewall: nft: %v", err))
+			} else {
+				log.Println("Custom firewall successfully applied:", cmd.ProcessState.ExitCode())
 			}
 		} else {
 			log.Println("Firewall Disabled")
@@ -1262,4 +1264,13 @@ func Apply(dir, root string, firewall bool) error {
 		return fmt.Errorf("%v", errors)
 	}
 	return nil
+}
+
+func cleanEnviron(environ []string) []string {
+	for i, env := range environ {
+		if strings.Contains(env, "GOKRAZY") {
+			environ[i] = ""
+		}
+	}
+	return environ
 }

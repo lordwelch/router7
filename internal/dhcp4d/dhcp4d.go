@@ -362,7 +362,7 @@ func (h *Handler) serveDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, options d
 			Expiry:           now.Add(h.leasePeriodForDevice(hwAddr)),
 			Hostname:         string(options[dhcp4.OptionHostName]),
 			VendorIdentifier: string(bytes.ToValidUTF8(bytes.ReplaceAll(options[dhcp4.OptionVendorClassIdentifier], []byte{0}, []byte{}), []byte{})),
-			LastACK:      h.timeNow(),
+			LastACK:          h.timeNow(),
 		}
 		copy(lease.Addr, reqIP.To4())
 
