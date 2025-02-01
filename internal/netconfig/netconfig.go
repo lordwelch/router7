@@ -32,7 +32,6 @@ import (
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
-	"github.com/google/renameio"
 	"github.com/mdlayher/ethtool"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -440,6 +439,43 @@ func applyInterfaceFEC(details InterfaceDetails) error {
 	return nil
 }
 
+func createResolvConfIfMissing(root, contents string) error {
+	fn := filepath.Join(root, "tmp", "resolv.conf")
+
+	// Explicitly check for the file's existance
+	// just so that we can avoid printing an error
+	// in the normal case (file exists).
+	st, err := os.Lstat(fn)
+	if err == nil {
+		if st.Mode()&os.ModeSymlink != 0 {
+			// File is a symbolic link (at boot, gokrazy links /tmp/resolv.conf to /proc/net/pnp).
+			// Delete the link and fallthrough to create the file.
+			if err := os.Remove(fn); err != nil {
+				return err
+			}
+		} else {
+			return nil // regular file already exists, do not overwrite
+		}
+	} else if !os.IsNotExist(err) {
+		return err // unexpected error
+	}
+
+	// /tmp/resolv.conf does not exist yet, create it.
+
+	// This is os.WriteFile, but with O_EXCL set
+	// so that we do not accidentally clobber the file
+	// in case another process (e.g. tailscaled) just wrote it.
+	f, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write([]byte(contents))
+	if err1 := f.Close(); err1 != nil && err == nil {
+		err = err1
+	}
+	return err
+}
+
 func applyInterfaces(dir, root string, cfg InterfaceConfig) error {
 	byName := make(map[string]InterfaceDetails)
 	byHardwareAddr := make(map[string]InterfaceDetails)
@@ -531,12 +567,9 @@ func applyInterfaces(dir, root string, cfg InterfaceConfig) error {
 			}
 
 			if details.Name == "lan0" {
-				b := []byte("nameserver " + addr.IP.String() + "\n")
-				fn := filepath.Join(root, "tmp", "resolv.conf")
-				if err := os.Remove(fn); err != nil && !os.IsNotExist(err) {
-					return err
-				}
-				if err := renameio.WriteFile(fn, b, 0644); err != nil {
+				// Use dnsd for the system's own DNS resolution.
+				resolvConf := "nameserver " + addr.IP.String() + "\n"
+				if err := createResolvConfIfMissing(root, resolvConf); err != nil {
 					return err
 				}
 			}
@@ -587,7 +620,7 @@ func nfifname(n string) []byte {
 //
 // Instead, it uses “fib daddr type local” to match all locally-configured IP
 // addresses and then excludes the loopback and LAN IP addresses.
-func matchUplinkIP() []expr.Any {
+func matchUplinkIP(lan0ip net.IP) []expr.Any {
 	return []expr.Any{
 		// [ payload load 4b @ network header + 16 => reg 1 ]
 		&expr.Payload{
@@ -630,7 +663,9 @@ func matchUplinkIP() []expr.Any {
 		&expr.Cmp{
 			Op:       expr.CmpOpNeq,
 			Register: 1,
-			Data:     []byte{0x0a, 0x00, 0x00, 0x00},
+			// Turn the lan0 IP address (e.g. 192.168.42.1)
+			// into a netmask like 192.168.42.0/24.
+			Data: []byte{lan0ip[0], lan0ip[1], lan0ip[2], 0},
 		},
 
 		// [ fib daddr type => reg 1 ]
@@ -648,7 +683,7 @@ func matchUplinkIP() []expr.Any {
 	}
 }
 
-func portForwardExpr(ifname string, proto uint8, portMin, portMax uint16, dest net.IP, dportMin, dportMax uint16) []expr.Any {
+func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest net.IP, dportMin, dportMax uint16) []expr.Any {
 	var cmp []expr.Any
 	if portMin == portMax {
 		cmp = []expr.Any{
@@ -675,7 +710,7 @@ func portForwardExpr(ifname string, proto uint8, portMin, portMax uint16, dest n
 			},
 		}
 	}
-	ex := append(matchUplinkIP(),
+	ex := append(matchUplinkIP(lan0ip),
 		// [ meta load l4proto => reg 1 ]
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		// [ cmp eq reg 1 0x00000006 ]
@@ -785,6 +820,15 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 		return err
 	}
 
+	lan0ip, err := LinkAddress(dir, "lan0")
+	if err != nil {
+		return err
+	}
+	lan0ip = lan0ip.To4()
+	if got, want := len(lan0ip), net.IPv4len; got != want {
+		return fmt.Errorf("lan0 does not have an IPv4 address configured: len %d != %d", got, want)
+	}
+
 	for _, fw := range cfg.Forwardings {
 		for _, proto := range strings.Split(fw.Proto, ",") {
 			var p uint8
@@ -809,7 +853,7 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 			c.AddRule(&nftables.Rule{
 				Table: nat,
 				Chain: prerouting,
-				Exprs: portForwardExpr(ifname, p, min, max, net.ParseIP(fw.DestAddr), dmin, dmax),
+				Exprs: portForwardExpr(lan0ip, p, min, max, net.ParseIP(fw.DestAddr), dmin, dmax),
 			})
 		}
 	}
