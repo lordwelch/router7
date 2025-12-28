@@ -16,6 +16,7 @@
 package radvd
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/netip"
@@ -39,6 +40,41 @@ type Server struct {
 
 func NewServer() (*Server, error) {
 	return &Server{}, nil
+}
+
+func (s *Server) UpdateDNS(b []byte) error {
+	m, err := ndp.ParseMessage(b)
+	if err != nil {
+		return err
+	}
+	if m.Type() != ipv6.ICMPTypeNeighborAdvertisement {
+		return fmt.Errorf("incorrect icmp message recieved expected %s, got %s", ipv6.ICMPTypeNeighborAdvertisement, m.Type())
+	}
+	n := m.(*ndp.NeighborAdvertisement)
+	var hw net.HardwareAddr
+	for _, o := range n.Options {
+		if o.Code() == uint8(ndp.Target) {
+			ll := o.(*ndp.LinkLayerAddress)
+			hw = ll.Addr
+			break
+		}
+	}
+	if hw == nil {
+		// Ignore advertisements that donot provide the MAC
+		return nil
+	}
+	if n.TargetAddress.IsGlobalUnicast() {
+		// Ignore advertisements that are global unicast addresses
+		log.Printf("Ignoring advertisement(is global): %v", n)
+		return nil
+	}
+	if !n.Solicited {
+		// Ignore advertisements that are not solicited
+		log.Printf("Ignoring advertisement(is not solicited): %v", n)
+		return nil
+	}
+	log.Printf("found IPv6 address %s for MAC address %s", n.TargetAddress, hw)
+	return nil
 }
 
 func (s *Server) SetPrefixes(prefixes []net.IPNet) {
@@ -75,6 +111,7 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 	var filter ipv6.ICMPFilter
 	filter.SetAll(true)
 	filter.Accept(ipv6.ICMPTypeRouterSolicitation)
+	filter.Accept(ipv6.ICMPTypeNeighborAdvertisement)
 	if err := s.pc.SetICMPFilter(&filter); err != nil {
 		return err
 	}
@@ -94,13 +131,19 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 		if err != nil {
 			return err
 		}
+		if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement {
+			err = s.UpdateDNS(buf[:n])
+			if err != nil {
+				log.Printf("Failed to update dns %v %#v", err, buf[:n])
+			}
+			continue
+		}
 		if !strings.HasSuffix(addr.String(), "%"+ifname) {
-			log.Printf("ignoring off-interface request from %v", addr)
+			log.Println("ignoring off-interface request from", addr.String())
 			continue
 		}
 		// TODO: isn’t this guaranteed by the filter above?
-		if n == 0 ||
-			ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
+		if n == 0 || ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
 			continue
 		}
 		if err := s.sendAdvertisement(addr); err != nil {
