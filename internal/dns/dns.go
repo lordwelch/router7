@@ -53,6 +53,7 @@ type Server struct {
 	Mux       *dns.ServeMux
 	once      bool
 	client    *dns.Client
+	tcpClient *dns.Client
 	domain    lcHostname
 	sometimes *rate.Limiter
 	prom      struct {
@@ -87,6 +88,7 @@ func NewServer(addr, domain string) *Server {
 	server := &Server{
 		Mux:    dns.NewServeMux(),
 		client: &dns.Client{},
+		tcpClient: &dns.Client{Net: "tcp"},
 		domain: lcHostname(strings.ToLower(domain)),
 		upstream: []string{
 			// https://developers.google.com/speed/public-dns/docs/using#google_public_dns_ip_addresses
@@ -547,6 +549,18 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				}
 				continue // fall back to next-slower upstream
 			}
+			if in.Truncated {
+				// Truncated response (exceeds UDP packet size), retry over TCP:
+				// https://www.rfc-editor.org/rfc/rfc2181#section-9
+				in, _, err = s.tcpClient.Exchange(r, u)
+				if err != nil {
+					if s.sometimes.Allow() {
+						log.Printf("resolving %v failed: %v", r.Question, err)
+					}
+					continue // fall back to next-slower upstream
+				}
+			}
+
 			if len(in.Answer) > 1 {
 				if in.Answer[0].Header().Rrtype == dns.TypeCNAME {
 					for i, rr := range in.Answer {

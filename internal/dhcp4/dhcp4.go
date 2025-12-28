@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -104,10 +105,13 @@ func (c *Client) ObtainOrRenew() bool {
 			return
 		}
 		if c.hardwareAddr == nil && c.HWAddr != nil {
-			c.hardwareAddr = c.HWAddr
+			// Clone the hardware address as the backing array does not remain valid.
+			c.hardwareAddr = slices.Clone(c.HWAddr)
 		}
 		if c.hardwareAddr == nil {
-			c.hardwareAddr = c.Interface.HardwareAddr
+			// Defensive slices.Clone because I noticed c.hardwareAddr
+			// containing an unexpected MAC address (~/2025-08-15-*dhcp4-loss).
+			c.hardwareAddr = slices.Clone(c.Interface.HardwareAddr)
 		}
 		if c.generateXID == nil {
 			c.generateXID = dhcp4.XIDGenerator(c.hardwareAddr)

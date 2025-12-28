@@ -31,6 +31,9 @@ import (
 	"syscall"
 
 	"github.com/gokrazy/gokrazy"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/rtr7/router7/internal/diag"
 	"github.com/rtr7/router7/internal/multilisten"
@@ -140,6 +143,23 @@ func logic() error {
 		}
 		w.Write(b)
 	})
+	promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Subsystem: "diagd",
+			Name:      "healthy",
+			Help:      "Whether diagd considers this machine healthy or not",
+		},
+		func() float64 {
+			mu.Lock()
+			re := mJSON.Evaluate()
+			mu.Unlock()
+			if err := firstError(re); err != "" {
+				log.Printf("prometheus metric reporting unhealthy: %v", err)
+				return 0
+			}
+			return 1
+		})
+	http.Handle("/metrics", promhttp.Handler())
 	if err := updateListeners(); err != nil {
 		return err
 	}
