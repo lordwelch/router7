@@ -18,7 +18,7 @@ require (
 	github.com/libdns/cloudflare v0.1.0
 	github.com/libdns/libdns v0.2.1
 	github.com/mdlayher/ethtool v0.1.0
-	github.com/mdlayher/ndp v0.10.0
+	github.com/mdlayher/ndp v1.1.0
 	github.com/mdlayher/packet v1.1.2
 	github.com/miekg/dns v1.1.50
 	github.com/prometheus/client_golang v1.19.0
@@ -27,7 +27,7 @@ require (
 	github.com/vishvananda/netns v0.0.4
 	golang.org/x/crypto v0.45.0
 	golang.org/x/net v0.47.0
-	golang.org/x/sync v0.17.0
+	golang.org/x/sync v0.18.0
 	golang.org/x/sys v0.38.0
 	golang.org/x/time v0.0.0-20220722155302-e5dcc9cfc0b9
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20220504211119-3d4a969bb56b
@@ -54,8 +54,9 @@ require (
 	github.com/stretchr/objx v0.2.0 // indirect
 	github.com/u-root/uio v0.0.0-20210528114334-82958018845c // indirect
 	gitlab.com/golang-commonmark/puny v0.0.0-20191124015043-9f83538fa04f // indirect
-	golang.org/x/mod v0.5.1 // indirect
-	golang.org/x/tools v0.1.8 // indirect
+	golang.org/x/mod v0.29.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/tools v0.38.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20220407013110-ef5c587f782d // indirect
 	google.golang.org/protobuf v1.33.0 // indirect

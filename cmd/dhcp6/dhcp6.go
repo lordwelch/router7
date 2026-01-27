@@ -19,7 +19,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"path"
@@ -54,6 +53,7 @@ func logic() error {
 		DUID:          duid,
 	})
 	if err != nil {
+		log.Println("Failed to create client")
 		return err
 	}
 	usr2 := make(chan os.Signal, 1)
@@ -98,6 +98,7 @@ func logic() error {
 			os.Exit(125) // quit supervision by gokrazy
 		}
 	}
+	log.Println("Failed to optain lease")
 	return c.Err() // permanent error
 }
 

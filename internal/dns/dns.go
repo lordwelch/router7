@@ -86,10 +86,10 @@ func NewServer(addr, domain string) *Server {
 	hostname, _ := os.Hostname()
 	ip, _, _ := net.SplitHostPort(addr)
 	server := &Server{
-		Mux:    dns.NewServeMux(),
-		client: &dns.Client{},
+		Mux:       dns.NewServeMux(),
+		client:    &dns.Client{},
 		tcpClient: &dns.Client{Net: "tcp"},
-		domain: lcHostname(strings.ToLower(domain)),
+		domain:    lcHostname(strings.ToLower(domain)),
 		upstream: []string{
 			// https://developers.google.com/speed/public-dns/docs/using#google_public_dns_ip_addresses
 			"45.90.28.26:53",

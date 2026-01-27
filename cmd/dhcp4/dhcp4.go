@@ -29,8 +29,8 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
-	"strings"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 

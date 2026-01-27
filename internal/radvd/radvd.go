@@ -43,24 +43,34 @@ func NewServer() (*Server, error) {
 }
 
 func (s *Server) UpdateDNS(b []byte) error {
-	m,err := ndp.ParseMessage(b)
+	m, err := ndp.ParseMessage(b)
 	if err != nil {
 		return err
 	}
 	if m.Type() != ipv6.ICMPTypeNeighborAdvertisement {
 		return fmt.Errorf("incorrect icmp message recieved expected %s, got %s", ipv6.ICMPTypeNeighborAdvertisement, m.Type())
 	}
-	n :=m.(*ndp.NeighborAdvertisement)
+	n := m.(*ndp.NeighborAdvertisement)
 	var hw net.HardwareAddr
-	for _,o := range n.Options {
+	for _, o := range n.Options {
 		if o.Code() == uint8(ndp.Target) {
 			ll := o.(*ndp.LinkLayerAddress)
 			hw = ll.Addr
 			break
 		}
 	}
-	if hw == nil || !n.TargetAddress.IsGlobalUnicast() || !n.Solicited {
-		// Ignore advertisements that donot provide the MAC, are not solicited and are not global unicast addresses
+	if hw == nil {
+		// log.Printf("Ignoring advertisement(no HardwareAddr): %v", n)
+		return nil
+	}
+	if n.TargetAddress.IsGlobalUnicast() {
+		log.Printf("Ignoring advertisement(is global): %v", n)
+		// Ignore advertisements that donot provide the MAC, are not solicited and are global unicast addresses
+		return nil
+	}
+	if !n.Solicited {
+		log.Printf("Ignoring advertisement(is not solicited): %v", n)
+		// Ignore advertisements that donot provide the MAC, are not solicited and are global unicast addresses
 		return nil
 	}
 	log.Printf("found IPv6 address %s for MAC address %s", n.TargetAddress, hw)
@@ -121,16 +131,19 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 		if err != nil {
 			return err
 		}
+		if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement {
+			err = s.UpdateDNS(buf[:n])
+			if err != nil {
+				log.Printf("Failed to update dns %v %#v", err, buf[:n])
+			}
+			continue
+		}
 		if !strings.HasSuffix(addr.String(), "%"+ifname) {
-			log.Printf("ignoring off-interface request from %v", addr)
+			log.Println("ignoring off-interface request from", addr.String())
 			continue
 		}
 		// TODO: isn’t this guaranteed by the filter above?
-		if n == 0 ||
-			ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
-				if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement{
-								s.UpdateDNS(buf)
-							}
+		if n == 0 || ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
 			continue
 		}
 		if err := s.sendAdvertisement(addr); err != nil {

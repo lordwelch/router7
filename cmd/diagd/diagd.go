@@ -95,9 +95,7 @@ func graph(uplink string, ipv6 bool) *diag.Monitor {
 			Then(diag.DHCPv6().
 				Then(diag.TCP6("lan0", "www.google.com:80"))).
 			Then(diag.RouterAdvertisments(uplink).
-				Then(diag.Ping6Gateway().
-					Then(diag.TCP6(uplink, "www.google.com:80")))).
-			Then(diag.Ping6("", ip6allrouters+"%"+uplink))
+				Then(diag.TCP6(uplink, "www.google.com:80")))
 	}
 	return diag.NewMonitor(graph)
 }
