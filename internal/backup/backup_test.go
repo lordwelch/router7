@@ -45,7 +45,7 @@ func TestArchive(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := backup.Archive(&buf, tmpin); err != nil {
+	if err := backup.Archive(&buf, tmpin, []string{}); err != nil {
 		t.Fatal(err)
 	}
 

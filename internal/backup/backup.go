@@ -23,9 +23,10 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
-func Archive(w io.Writer, dir string) error {
+func Archive(w io.Writer, dir string, excludes []string) error {
 	gw, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
 	if err != nil {
 		return err
@@ -46,7 +47,7 @@ func Archive(w io.Writer, dir string) error {
 		if path == dir {
 			return nil // skip root
 		}
-		if last := filepath.Base(path); last == "nobackup" || last == "srv" {
+		if last := filepath.Base(path); last == "nobackup" || last == "srv" || slices.Contains(excludes, path) {
 			return filepath.SkipDir // skip nobackup (and srv for legacy)
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -61,7 +62,7 @@ func Archive(w io.Writer, dir string) error {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if !info.Mode().IsDir() {
+		if !info.Mode().IsDir() && !slices.Contains(excludes, path) {
 			b, err := ioutil.ReadFile(path)
 			if err != nil {
 				return err
