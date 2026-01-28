@@ -969,7 +969,7 @@ func applyFirewall(dir, ifname string) error {
 
 	nat := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "nat",
+		Name:   "nat-gokrazy",
 	})
 
 	pf := c.AddChain(&nftables.Chain{
@@ -1034,12 +1034,12 @@ func applyFirewall(dir, ifname string) error {
 
 	filter4 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "filter",
+		Name:   "filter-gokrazy",
 	})
 
 	filter6 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv6,
-		Name:   "filter",
+		Name:   "filter-gokrazy",
 	})
 
 	for _, filter := range []*nftables.Table{filter4, filter6} {
