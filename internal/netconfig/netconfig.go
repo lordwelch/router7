@@ -930,13 +930,15 @@ func hairpinDNAT() []expr.Any {
 }
 
 const pfChain = "router7-portforwardings"
+const natTable = "router7-nat"
+const filterTable = "router7-filter"
 
 // Only update port forwarding if there are existing rules.
 // This is required to not stomp over podman port forwarding, for example.
 func updatePortforwardingsOnly(dir, ifname string) error {
 	c := &nftables.Conn{}
 
-	nat, err := c.ListTable("nat")
+	nat, err := c.ListTable(natTable)
 	if err != nil {
 		return err
 	}
@@ -969,7 +971,7 @@ func applyFirewall(dir, ifname string) error {
 
 	nat := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "nat",
+		Name:   natTable,
 	})
 
 	pf := c.AddChain(&nftables.Chain{
@@ -1034,12 +1036,12 @@ func applyFirewall(dir, ifname string) error {
 
 	filter4 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv4,
-		Name:   "filter",
+		Name:   filterTable,
 	})
 
 	filter6 := c.AddTable(&nftables.Table{
 		Family: nftables.TableFamilyIPv6,
-		Name:   "filter",
+		Name:   filterTable,
 	})
 
 	for _, filter := range []*nftables.Table{filter4, filter6} {
