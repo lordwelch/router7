@@ -16,7 +16,6 @@ package dhcp4d
 
 import (
 	"encoding/binary"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -81,11 +80,11 @@ func (*noopSink) SetWriteDeadline(t time.Time) error                 { return ni
 func (*noopSink) ReadFrom(buf []byte) (int, net.Addr, error)         { return 0, nil, nil }
 
 func testHandler(t *testing.T) (_ *Handler, cleanup func()) {
-	tmpdir, err := ioutil.TempDir("", "dhcp4dtest")
+	tmpdir, err := os.MkdirTemp("", "dhcp4dtest")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(filepath.Join(tmpdir, "interfaces.json"), []byte(goldenInterfaces), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpdir, "interfaces.json"), []byte(goldenInterfaces), 0644); err != nil {
 		t.Fatal(err)
 	}
 	handler, err := NewHandler(

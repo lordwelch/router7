@@ -95,7 +95,7 @@ func (prb *packetRingBuffer) writePacket(p gopacket.Packet) {
 
 func (prb *packetRingBuffer) packetsLocked() []gopacket.Packet {
 	packets := make([]gopacket.Packet, 0, prb.r.Len())
-	prb.r.Do(func(x interface{}) {
+	prb.r.Do(func(x any) {
 		if x != nil {
 			packets = append(packets, x.(gopacket.Packet))
 		}

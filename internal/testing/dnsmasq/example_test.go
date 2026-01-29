@@ -42,8 +42,8 @@ func Example() {
 	}
 	actionOnly := func(line string) string {
 		result := line
-		if idx := strings.Index(result, " "); idx > -1 {
-			return result[:idx]
+		if before, _, ok := strings.Cut(result, " "); ok {
+			return before
 		}
 		return result
 	}

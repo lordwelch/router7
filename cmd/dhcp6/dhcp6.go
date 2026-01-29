@@ -19,7 +19,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,7 +40,7 @@ func logic() error {
 		return err
 	}
 
-	duid, err := ioutil.ReadFile("/perm/dhcp6/duid")
+	duid, err := os.ReadFile("/perm/dhcp6/duid")
 	if err != nil {
 		log.Printf("could not read /perm/dhcp6/duid (%v), proceeding with DUID-LLT", err)
 	}

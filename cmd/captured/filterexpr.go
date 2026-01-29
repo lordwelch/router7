@@ -1,5 +1,4 @@
 //go:build ignore
-// +build ignore
 
 // Copyright 2018 Google Inc.
 //

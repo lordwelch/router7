@@ -85,7 +85,6 @@ func init() {
 			obj:    &nftables.CounterObj{Table: filter6, Name: "outputc"},
 		},
 	} {
-		metric := metric // copy
 		var mu sync.Mutex
 		updateCounter := func() {
 			mu.Lock()

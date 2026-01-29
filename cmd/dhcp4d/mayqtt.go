@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -12,12 +12,12 @@ type PublishRequest struct {
 	Topic    string
 	Qos      byte
 	Retained bool
-	Payload  interface{}
+	Payload  any
 }
 
 func publisherLoop(requests <-chan PublishRequest) error {
 	const configFn = "/perm/dhcp4d/mqtt-broker.txt"
-	b, err := ioutil.ReadFile(configFn)
+	b, err := os.ReadFile(configFn)
 	if err != nil {
 		// discard requests:
 		for range requests {

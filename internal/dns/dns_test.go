@@ -16,7 +16,7 @@ package dns
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -111,7 +111,7 @@ func TestResolveFallbackOnce(t *testing.T) {
 		"266.266.266.266:53",
 	}
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := resolveTestTarget(s, "google.ch.", net.ParseIP("127.0.0.1")); err != nil {
 			t.Fatal(err)
 		}
@@ -588,7 +588,7 @@ func TestSubname(t *testing.T) {
 		s.DyndnsHandler(rec, req)
 		resp := rec.Result()
 		if got, want := resp.StatusCode, http.StatusOK; got != want {
-			body, _ := ioutil.ReadAll(resp.Body)
+			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("POST /dyndns: unexpected HTTP status: got %v, want %v (%q)", resp.Status, want, string(body))
 		}
 	}

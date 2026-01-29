@@ -2,7 +2,6 @@ package oui
 
 import (
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +16,7 @@ func TestDB(t *testing.T) {
 		salcompBlock  = "44:09:b8"
 	)
 
-	tmpdir, err := ioutil.TempDir("", "oui")
+	tmpdir, err := os.MkdirTemp("", "oui")
 	if err != nil {
 		t.Fatal(err)
 	}

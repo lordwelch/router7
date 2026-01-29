@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -47,12 +47,12 @@ func TestLeaseHandler(t *testing.T) {
 	flag.Set("interface", "lo")
 	ctx, canc := context.WithCancel(context.Background())
 	defer canc()
-	tmp, err := ioutil.TempDir("", "dhcp4dtest")
+	tmp, err := os.MkdirTemp("", "dhcp4dtest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmp)
-	if err := ioutil.WriteFile(filepath.Join(tmp, "interfaces.json"), []byte(interfacesJson), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "interfaces.json"), []byte(interfacesJson), 0644); err != nil {
 		t.Fatal(err)
 	}
 	srv, err := newSrv(tmp)
@@ -78,10 +78,10 @@ func TestLeaseHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := resp.StatusCode, http.StatusOK; got != want {
-		b, _ := ioutil.ReadAll(resp.Body)
+		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unexpected HTTP response code: got %v (%s), want %v", resp.Status, strings.TrimSpace(string(b)), want)
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestLeaseHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := resp.StatusCode, http.StatusOK; got != want {
-		b, _ := ioutil.ReadAll(resp.Body)
+		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unexpected HTTP response code: got %v (%s), want %v", resp.Status, strings.TrimSpace(string(b)), want)
 	}
 	if got, want := resp.Header.Get("X-Lease-Active"), "false"; got != want {

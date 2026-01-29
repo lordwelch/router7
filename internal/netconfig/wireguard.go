@@ -18,7 +18,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -61,7 +60,7 @@ func (w *wgLink) Attrs() *netlink.LinkAttrs {
 }
 
 func applyWireGuard(dir string) error {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "wireguard.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "wireguard.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

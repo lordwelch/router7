@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -113,7 +112,7 @@ func (d *DB) update() {
 		return // already up-to-date
 	}
 	if got, want := resp.StatusCode, http.StatusOK; got != want {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		d.setErr(fmt.Errorf("%s: unexpected HTTP status: got %v, want %v (%v)", d.ouiURL, resp.Status, want, body))
 		return
 	}
