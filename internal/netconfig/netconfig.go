@@ -18,7 +18,6 @@ package netconfig
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -60,7 +59,7 @@ func subnetMaskSize(mask string) (int, error) {
 }
 
 func applyDhcp4(dir string, cfg InterfaceConfig) error {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "dhcp4/wire/lease.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "dhcp4/wire/lease.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // dhcp4 might not have obtained a lease yet
@@ -144,7 +143,7 @@ func applyDhcp4(dir string, cfg InterfaceConfig) error {
 
 		log.Printf("IPv4 traffic is routed via WireGuard, setting host route instead of default route")
 
-		b, err := ioutil.ReadFile(filepath.Join(dir, "wireguard.json"))
+		b, err := os.ReadFile(filepath.Join(dir, "wireguard.json"))
 		if err != nil {
 			return err
 		}
@@ -219,7 +218,7 @@ func defaultViaWireguard(cfg InterfaceConfig) bool {
 }
 
 func applyDhcp6(dir string) error {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "dhcp6/wire/lease.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "dhcp6/wire/lease.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // dhcp6 might not have obtained a lease yet
@@ -292,7 +291,7 @@ type InterfaceConfig struct {
 // interfaces.json.
 func Interface(dir, ifname string) (InterfaceDetails, error) {
 	fn := filepath.Join(dir, "interfaces.json")
-	b, err := ioutil.ReadFile(fn)
+	b, err := os.ReadFile(fn)
 	if err != nil {
 		return InterfaceDetails{}, err
 	}
@@ -813,7 +812,7 @@ func parsePort(p string) (min uint16, max uint16, _ error) {
 }
 
 func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Table, prerouting *nftables.Chain) error {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "portforwardings.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "portforwardings.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -1221,7 +1220,7 @@ func applySysctl(ifname string) error {
 		idx := strings.Index(ctl, "=")
 		key, val := ctl[:idx], ctl[idx+1:]
 		fn := strings.Replace(key, ".", "/", -1)
-		if err := ioutil.WriteFile("/proc/sys/"+fn, []byte(val), 0644); err != nil {
+		if err := os.WriteFile("/proc/sys/"+fn, []byte(val), 0644); err != nil {
 			return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)
 		}
 	}
@@ -1231,7 +1230,7 @@ func applySysctl(ifname string) error {
 
 func Apply(dir, root string) error {
 	var cfg InterfaceConfig
-	b, err := ioutil.ReadFile(filepath.Join(dir, "interfaces.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "interfaces.json"))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

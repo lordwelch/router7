@@ -16,7 +16,6 @@ package backup_test
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,13 +25,13 @@ import (
 )
 
 func TestArchive(t *testing.T) {
-	tmpin, err := ioutil.TempDir("", "backuptest")
+	tmpin, err := os.MkdirTemp("", "backuptest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpin)
 
-	if err := ioutil.WriteFile(filepath.Join(tmpin, "random.seed"), []byte{0xaa, 0xbb}, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpin, "random.seed"), []byte{0xaa, 0xbb}, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,7 +39,7 @@ func TestArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ioutil.WriteFile(filepath.Join(tmpin, "dhcp4d", "leases.json"), []byte("{}"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpin, "dhcp4d", "leases.json"), []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +48,7 @@ func TestArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tmpout, err := ioutil.TempDir("", "backuptest")
+	tmpout, err := os.MkdirTemp("", "backuptest")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -125,7 +124,7 @@ func main() {
 	var config struct {
 		Records []DynDNSRecord `json:"records"`
 	}
-	b, err := ioutil.ReadFile(*configFile)
+	b, err := os.ReadFile(*configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			gokrazy.DontStartOnBoot()

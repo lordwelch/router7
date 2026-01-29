@@ -18,8 +18,8 @@ package multilisten
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -77,7 +77,7 @@ func (p *Pool) ListenAndServe(hosts []string, listenerFor func(host string) List
 // IPv6Net1 returns the IP address which router7 picks from the IPv6 prefix for
 // itself, e.g. address 2a02:168:4a00::1 for prefix 2a02:168:4a00::/48.
 func IPv6Net1(dir string) (string, error) {
-	b, err := ioutil.ReadFile(filepath.Join(dir, "dhcp6/wire/lease.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "dhcp6/wire/lease.json"))
 	if err != nil {
 		return "", err
 	}

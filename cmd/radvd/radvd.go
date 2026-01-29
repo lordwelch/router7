@@ -18,7 +18,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -35,7 +34,7 @@ func logic() error {
 		return err
 	}
 	readConfig := func() error {
-		b, err := ioutil.ReadFile("/perm/dhcp6/wire/lease.json")
+		b, err := os.ReadFile("/perm/dhcp6/wire/lease.json")
 		if err != nil {
 			return err
 		}
@@ -45,7 +44,7 @@ func logic() error {
 		}
 
 		var additional []net.IPNet
-		if b, err := ioutil.ReadFile("/perm/radvd/prefixes.json"); err == nil {
+		if b, err := os.ReadFile("/perm/radvd/prefixes.json"); err == nil {
 			if err := json.Unmarshal(b, &additional); err != nil {
 				return err
 			}

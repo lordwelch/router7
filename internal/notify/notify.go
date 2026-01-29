@@ -16,7 +16,6 @@
 package notify
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +26,7 @@ import (
 var numericRe = regexp.MustCompile(`^[0-9]+$`)
 
 func Process(name string, sig os.Signal) error {
-	fis, err := ioutil.ReadDir("/proc")
+	fis, err := os.ReadDir("/proc")
 	if err != nil {
 		return err
 	}
@@ -38,7 +37,7 @@ func Process(name string, sig os.Signal) error {
 		if !numericRe.MatchString(fi.Name()) {
 			continue
 		}
-		b, err := ioutil.ReadFile(filepath.Join("/proc", fi.Name(), "cmdline"))
+		b, err := os.ReadFile(filepath.Join("/proc", fi.Name(), "cmdline"))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue // process vanished

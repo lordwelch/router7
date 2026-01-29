@@ -22,7 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -64,14 +64,14 @@ func healthy() error {
 	}
 	defer resp.Body.Close()
 	if got, want := resp.StatusCode, http.StatusOK; got != want {
-		b, _ := ioutil.ReadAll(resp.Body)
+		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("%v: got HTTP %v (%s), want HTTP status %v",
 			req.URL.String(),
 			resp.Status,
 			string(b),
 			want)
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func logic() error {
 	}
 	ackFn := filepath.Join(*stateDir, "wire/ack")
 	var ack *layers.DHCPv4
-	ackB, err := ioutil.ReadFile(ackFn)
+	ackB, err := os.ReadFile(ackFn)
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("Loading previous DHCPACK packet from %s: %v", ackFn, err)
 	} else {

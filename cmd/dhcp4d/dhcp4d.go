@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -212,7 +211,7 @@ form {
 )
 
 func loadLeases(h *dhcp4d.Handler, fn string) error {
-	b, err := ioutil.ReadFile(fn)
+	b, err := os.ReadFile(fn)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

@@ -17,7 +17,7 @@ package diag
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 )
 
@@ -25,7 +25,7 @@ func leaseValid(fn string) (status string, _ error) {
 	var lease struct {
 		ValidUntil time.Time `json:"valid_until"`
 	}
-	b, err := ioutil.ReadFile(fn)
+	b, err := os.ReadFile(fn)
 	if err != nil {
 		return "", err
 	}

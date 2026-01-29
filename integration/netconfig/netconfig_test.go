@@ -17,7 +17,6 @@ package integration_test
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -301,7 +300,7 @@ var wireGuardAvailable = func() bool {
 
 func TestNetconfig(t *testing.T) {
 	if os.Getenv("HELPER_PROCESS") == "1" {
-		tmp, err := ioutil.TempDir("", "router7")
+		tmp, err := os.MkdirTemp("", "router7")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -319,12 +318,12 @@ func TestNetconfig(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(tmp, filepath.Dir(golden.filename)), 0755); err != nil {
 				t.Fatal(err)
 			}
-			if err := ioutil.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if wireGuardAvailable {
-			if err := ioutil.WriteFile(filepath.Join(tmp, "wireguard.json"), []byte(goldenWireguard), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, "wireguard.json"), []byte(goldenWireguard), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -350,7 +349,7 @@ func TestNetconfig(t *testing.T) {
 			t.Fatalf("netconfig.Apply: %v", err)
 		}
 
-		b, err := ioutil.ReadFile(filepath.Join(tmp, "root", "tmp", "resolv.conf"))
+		b, err := os.ReadFile(filepath.Join(tmp, "root", "tmp", "resolv.conf"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -569,7 +568,7 @@ const goldenInterfacesBridges = `
 
 func TestNetconfigBridges(t *testing.T) {
 	if os.Getenv("HELPER_PROCESS") == "1" {
-		tmp, err := ioutil.TempDir("", "router7")
+		tmp, err := os.MkdirTemp("", "router7")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -583,7 +582,7 @@ func TestNetconfigBridges(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(tmp, filepath.Dir(golden.filename)), 0755); err != nil {
 				t.Fatal(err)
 			}
-			if err := ioutil.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -686,7 +685,7 @@ func ipLines(args ...string) ([]string, error) {
 
 func TestDHCPv4OldAddressDeconfigured(t *testing.T) {
 	if os.Getenv("HELPER_PROCESS") == "1" {
-		tmp, err := ioutil.TempDir("", "router7")
+		tmp, err := os.MkdirTemp("", "router7")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -701,7 +700,7 @@ func TestDHCPv4OldAddressDeconfigured(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(tmp, filepath.Dir(golden.filename)), 0755); err != nil {
 				t.Fatal(err)
 			}
-			if err := ioutil.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, golden.filename), []byte(golden.content), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -730,7 +729,7 @@ func TestDHCPv4OldAddressDeconfigured(t *testing.T) {
   ]
 }
 `
-		if err := ioutil.WriteFile(filepath.Join(tmp, "dhcp4/wire/lease.json"), []byte(anotherDhcp4), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, "dhcp4/wire/lease.json"), []byte(anotherDhcp4), 0600); err != nil {
 			t.Fatal(err)
 		}
 

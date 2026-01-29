@@ -16,7 +16,7 @@ package dns
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -588,7 +588,7 @@ func TestSubname(t *testing.T) {
 		s.DyndnsHandler(rec, req)
 		resp := rec.Result()
 		if got, want := resp.StatusCode, http.StatusOK; got != want {
-			body, _ := ioutil.ReadAll(resp.Body)
+			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("POST /dyndns: unexpected HTTP status: got %v, want %v (%q)", resp.Status, want, string(body))
 		}
 	}

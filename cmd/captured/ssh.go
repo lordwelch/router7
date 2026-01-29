@@ -17,9 +17,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
+	"os"
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
@@ -114,7 +114,7 @@ func (s *session) request(req *ssh.Request, prb *packetRingBuffer) (err error) {
 }
 
 func loadHostKey(path string) (ssh.Signer, error) {
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

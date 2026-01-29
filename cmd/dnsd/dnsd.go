@@ -18,7 +18,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -92,7 +91,7 @@ func logic() error {
 	}
 	srv := dns.NewServer(ip.String()+":53", *domain)
 	readLeases := func() error {
-		b, err := ioutil.ReadFile("/perm/dhcp4d/leases.json")
+		b, err := os.ReadFile("/perm/dhcp4d/leases.json")
 		if err != nil {
 			return err
 		}

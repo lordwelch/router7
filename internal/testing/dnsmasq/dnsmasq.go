@@ -19,7 +19,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"regexp"
@@ -45,7 +44,7 @@ var dhcpActionRe = regexp.MustCompile(` (DHCP[^(]+\(.*)$`)
 
 // Run starts a dnsmasq(8) process and returns a handle to it.
 func Run(t *testing.T, iface, ns string) *Process {
-	ready, err := ioutil.TempFile("", "router7")
+	ready, err := os.CreateTemp("", "router7")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +123,7 @@ func Run(t *testing.T, iface, ns string) *Process {
 	// Wait for dnsmasq to write its process id, at which point it is already
 	// listening for requests.
 	for {
-		b, err := ioutil.ReadFile(ready.Name())
+		b, err := os.ReadFile(ready.Name())
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}

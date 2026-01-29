@@ -15,7 +15,6 @@
 package integration_test
 
 import (
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -56,7 +55,7 @@ func TestDHCPv4(t *testing.T) {
 		}
 	}
 
-	ready, err := ioutil.TempFile("", "router7")
+	ready, err := os.CreateTemp("", "router7")
 	if err != nil {
 		t.Fatal(err)
 	}

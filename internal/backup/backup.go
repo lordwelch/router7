@@ -20,7 +20,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"slices"
@@ -63,7 +62,7 @@ func Archive(w io.Writer, dir string, excludes []string) error {
 			return err
 		}
 		if !info.Mode().IsDir() && !slices.Contains(excludes, path) {
-			b, err := ioutil.ReadFile(path)
+			b, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
