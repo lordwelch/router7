@@ -111,7 +111,7 @@ func TestResolveFallbackOnce(t *testing.T) {
 		"266.266.266.266:53",
 	}
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := resolveTestTarget(s, "google.ch.", net.ParseIP("127.0.0.1")); err != nil {
 			t.Fatal(err)
 		}

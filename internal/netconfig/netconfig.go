@@ -834,7 +834,7 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 	}
 
 	for _, fw := range cfg.Forwardings {
-		for _, proto := range strings.Split(fw.Proto, ",") {
+		for proto := range strings.SplitSeq(fw.Proto, ",") {
 			var p uint8
 			switch proto {
 			case "", "tcp":
@@ -1217,8 +1217,8 @@ func applySysctl(ifname string) error {
 		sysctls = append(sysctls, "net.ipv6.conf."+ifname+".accept_ra=2")
 	}
 	for _, ctl := range sysctls {
-		idx := strings.Index(ctl, "=")
-		key, val := ctl[:idx], ctl[idx+1:]
+		before, after, _ := strings.Cut(ctl, "=")
+		key, val := before, after
 		fn := strings.Replace(key, ".", "/", -1)
 		if err := os.WriteFile("/proc/sys/"+fn, []byte(val), 0644); err != nil {
 			return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)

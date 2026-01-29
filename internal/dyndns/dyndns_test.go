@@ -24,8 +24,7 @@ import (
 )
 
 func TestUpdate(t *testing.T) {
-	ctx, canc := context.WithCancel(context.Background())
-	defer canc()
+	ctx := t.Context()
 
 	const zone = "zekjur.net"
 	provider := &testProvider{

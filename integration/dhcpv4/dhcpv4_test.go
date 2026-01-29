@@ -106,7 +106,7 @@ func TestDHCPv4(t *testing.T) {
 		Interface: iface,
 	}
 	// Obtain first, then renew
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if !c.ObtainOrRenew() {
 			t.Fatal(c.Err())
 		}

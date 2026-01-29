@@ -12,7 +12,7 @@ type PublishRequest struct {
 	Topic    string
 	Qos      byte
 	Retained bool
-	Payload  interface{}
+	Payload  any
 }
 
 func publisherLoop(requests <-chan PublishRequest) error {
