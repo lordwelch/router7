@@ -235,6 +235,7 @@ func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lower := strings.ToLower(hostname)
+	log.Printf("%s requesting dns %v -> %v", lower, host, ip)
 	subnames, ok := s.subnames[lcHostname(lower)]
 	if !ok {
 		subnames = make(map[string]net.IP)
