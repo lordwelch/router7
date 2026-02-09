@@ -16,12 +16,15 @@
 package dns
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +36,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
@@ -43,11 +47,90 @@ var log = teelogger.NewConsole()
 // DHCP-based local name resolution can be made case-insensitive.
 type lcHostname string
 
-type Server struct {
-	Mux *dns.ServeMux
+type DNSClient struct {
+	udp    *dns.Client
+	tcp    *dns.Client
+	http   *dohClient
+	dialer *net.Dialer
+	// TODO: Make cache either here or on Server. If on here we also need to allow bypassing the cache here...
+}
+var d net.Dialer
 
-	client    *dns.Client
-	tcpClient *dns.Client
+func DialContext(preResolved map[string]string) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if addr, ok := preResolved[address]; ok {
+			address = addr
+		}
+		return d.DialContext(ctx, network, address)
+	}
+
+}
+func NewDNSClient(dohMap map[string]string) *DNSClient {
+	if dohMap == nil {
+		dohMap = make(map[string]string)
+	}
+	return &DNSClient{
+		udp: &dns.Client{},
+		tcp: &dns.Client{Net: "tcp"},
+		http: &dohClient{
+			http: http.Client{
+				Transport: &http.Transport{
+					Proxy:                 http.ProxyFromEnvironment,
+					DialContext:           DialContext(dohMap),
+					ForceAttemptHTTP2:     true,
+					MaxIdleConns:          100,
+					IdleConnTimeout:       90 * time.Second,
+					TLSHandshakeTimeout:   10 * time.Second,
+					ExpectContinueTimeout: 1 * time.Second,
+				},
+				Timeout: 30 * time.Second,
+			},
+		},
+	}
+}
+
+func (d *DNSClient) Exchange(m *dns.Msg, address string, clientInfo map[string]string) (*dns.Msg, time.Duration, error) {
+	var (
+		in  *dns.Msg
+		rtt time.Duration
+		err error
+		uri *url.URL
+	)
+	if strings.HasPrefix(address, "https") {
+		uri, err = url.Parse(address)
+		if err != nil {
+			return nil, -1, err
+		}
+		uri.Fragment=""
+		values := uri.Query()
+		for key, value := range clientInfo {
+			values.Set(key, value)
+		}
+		uri.RawQuery = values.Encode()
+		in, rtt, err = d.http.Exchange(m, uri.String())
+		if err != nil {
+			return nil, -1, err // fall back to next-slower upstream
+		}
+	} else {
+		in, rtt, err = d.udp.Exchange(m, address)
+		if err != nil {
+			return nil, -1, err // fall back to next-slower upstream
+		}
+	}
+	if in.Truncated {
+		// Truncated response (exceeds UDP packet size), retry over TCP:
+		// https://www.rfc-editor.org/rfc/rfc2181#section-9
+		in, rtt, err = d.tcp.Exchange(m, address)
+		if err != nil {
+			return nil, -1, err
+		}
+	}
+	return in, rtt, nil
+}
+
+type Server struct {
+	Mux       *dns.ServeMux
+	client    *DNSClient
 	domain    string
 	sometimes *rate.Limiter
 	prom      struct {
@@ -64,24 +147,46 @@ type Server struct {
 	subnames     map[lcHostname]map[string]net.IP // hostname → subname → ip
 
 	upstreamMu sync.RWMutex
-	upstream   []string
+	upstream   Upstreams
 }
 
-func NewServer(addr, domain string) *Server {
+type Upstreams struct {
+	Primary   []string
+	Secondary []string
+}
+
+func NewServer(addr, domain string, upstream Upstreams) *Server {
+	domain = strings.ToLower(domain)
 	hostname, _ := os.Hostname()
 	ip, _, _ := net.SplitHostPort(addr)
-	server := &Server{
-		Mux:       dns.NewServeMux(),
-		client:    &dns.Client{},
-		tcpClient: &dns.Client{Net: "tcp"},
-		domain:    domain,
-		upstream: []string{
+	if len(upstream.Primary) < 1 {
+		upstream = Upstreams{Primary: []string{
 			// https://developers.google.com/speed/public-dns/docs/using#google_public_dns_ip_addresses
 			"8.8.8.8:53",
 			"8.8.4.4:53",
 			"[2001:4860:4860::8888]:53",
 			"[2001:4860:4860::8844]:53",
-		},
+		}}
+	}
+	dohMap := make(map[string]string)
+	for _, addr := range upstream.Primary {
+		if strings.HasPrefix("https", addr) {
+			uri, ip, found := strings.Cut(addr, "#")
+			if !found {
+				continue
+			}
+			parsedUri, err := url.Parse(uri)
+			if err != nil {
+				continue
+			}
+			dohMap[parsedUri.Host+":443"] = ip
+		}
+	}
+	server := &Server{
+		Mux:       dns.NewServeMux(),
+		client:    NewDNSClient(dohMap),
+		domain:    domain,
+		upstream:  upstream,
 		sometimes: rate.NewLimiter(rate.Every(1*time.Second), 1), // at most once per second
 		hostname:  hostname,
 		ip:        ip,
@@ -111,7 +216,7 @@ func NewServer(addr, domain string) *Server {
 	})
 	server.prom.registry.MustRegister(server.prom.questions)
 
-	server.prom.registry.MustRegister(prometheus.NewGoCollector())
+	server.prom.registry.MustRegister(collectors.NewGoCollector())
 	server.initHostsLocked()
 	server.Mux.HandleFunc(".", server.handleRequest)
 	server.Mux.HandleFunc("lan.", server.handleInternal)
@@ -147,10 +252,7 @@ func (m measurement) String() string {
 	return fmt.Sprintf("{upstream: %s, rtt: %v}", m.upstream, m.rtt)
 }
 
-func (s *Server) probeUpstreamLatency() {
-	upstreams := s.upstreams()
-	results := make([]measurement, len(upstreams))
-	var wg sync.WaitGroup
+func (s *Server) probe(wg *sync.WaitGroup, upstreams []string, results []measurement) {
 	for idx, u := range upstreams {
 		wg.Add(1)
 		go func(idx int, u string) {
@@ -159,7 +261,7 @@ func (s *Server) probeUpstreamLatency() {
 			m := new(dns.Msg)
 			m.SetQuestion("google.ch.", dns.TypeA)
 			start := time.Now()
-			_, _, err := s.client.Exchange(m, u)
+			_, _, err := s.client.Exchange(m, u, nil)
 			rtt := time.Since(start)
 			if err != nil {
 				// including unresponsive upstreams in results makes the update
@@ -170,14 +272,29 @@ func (s *Server) probeUpstreamLatency() {
 			results[idx] = measurement{u, rtt}
 		}(idx, u)
 	}
+}
+
+func (s *Server) probeUpstreamLatency() {
+	upstreams := s.upstreams()
+	primaryResults := make([]measurement, len(upstreams.Primary))
+	secondaryResults := make([]measurement, len(upstreams.Secondary))
+	var wg sync.WaitGroup
+	s.probe(&wg, upstreams.Primary, primaryResults)
+	s.probe(&wg, upstreams.Secondary, secondaryResults)
 	wg.Wait()
 	// Re-order by resolving latency:
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].rtt < results[j].rtt
+	sort.Slice(primaryResults, func(i, j int) bool {
+		return primaryResults[i].rtt < primaryResults[j].rtt
 	})
-	log.Printf("probe results: %v", results)
-	for idx, result := range results {
-		upstreams[idx] = result.upstream
+	sort.Slice(secondaryResults, func(i, j int) bool {
+		return secondaryResults[i].rtt < secondaryResults[j].rtt
+	})
+	log.Printf("probe results: %v", append(primaryResults, secondaryResults...))
+	for idx, result := range primaryResults {
+		upstreams.Primary[idx] = result.upstream
+	}
+	for idx, result := range secondaryResults {
+		upstreams.Secondary[idx] = result.upstream
 	}
 	s.upstreamMu.Lock()
 	defer s.upstreamMu.Unlock()
@@ -394,12 +511,28 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func (s *Server) upstreams() []string {
+func (s *Server) upstreams() Upstreams {
 	s.upstreamMu.RLock()
 	defer s.upstreamMu.RUnlock()
-	result := make([]string, len(s.upstream))
-	copy(result, s.upstream)
+	result := Upstreams{}
+	result.Primary = make([]string, len(s.upstream.Primary))
+	result.Secondary = make([]string, len(s.upstream.Secondary))
+	copy(result.Primary, s.upstream.Primary)
+	copy(result.Secondary, s.upstream.Secondary)
 	return result
+}
+
+func (s *Server) updateUpstreams(u string) {
+	s.upstreamMu.Lock()
+	defer s.upstreamMu.Unlock()
+	if idx := slices.Index(s.upstream.Primary, u); idx > 0 {
+		s.upstream.Primary = append(append([]string{u}, s.upstream.Primary[:idx]...), s.upstream.Primary[idx+1:]...)
+		return
+	}
+	if idx := slices.Index(s.upstream.Secondary, u); idx > 0 {
+		s.upstream.Secondary = append(append([]string{u}, s.upstream.Secondary[:idx]...), s.upstream.Secondary[idx+1:]...)
+		return
+	}
 }
 
 func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
@@ -414,35 +547,35 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	s.prom.queries.Inc()
 	s.prom.questions.Observe(float64(len(r.Question)))
 	s.prom.upstream.WithLabelValues("DNS").Inc()
-
-	for idx, u := range s.upstreams() {
-		in, _, err := s.client.Exchange(r, u)
+	var (
+		err        error
+		clientInfo = make(map[string]string) // device_id=12345&device_name=John's%20Firefox&device_model=iPhone
+		// TODO: make device_id and make it compatible with headscale.
+		// TODO: extract device_model from dhcp vendor identifier
+	)
+	if addr := w.RemoteAddr(); addr != nil {
+		if ip, _, ok := strings.Cut(w.RemoteAddr().String(), ":"); ok {
+			ip, _ = dns.ReverseAddr(ip)
+			host, ok := s.hostByIP(ip)
+			if ok {
+				clientInfo["device_name"] = host
+			}
+		}
+	}
+	upstreams := s.upstreams()
+	// We have primary and secondar so we can ensure that nextdns doh is tried first
+	for idx, u := range append(upstreams.Primary, upstreams.Secondary...) {
+		var in *dns.Msg
+		in, _, err = s.client.Exchange(r, u, clientInfo)
 		if err != nil {
 			if s.sometimes.Allow() {
 				log.Printf("resolving %v failed: %v", r.Question, err)
 			}
 			continue // fall back to next-slower upstream
 		}
-		if in.Truncated {
-			// Truncated response (exceeds UDP packet size), retry over TCP:
-			// https://www.rfc-editor.org/rfc/rfc2181#section-9
-			in, _, err = s.tcpClient.Exchange(r, u)
-			if err != nil {
-				if s.sometimes.Allow() {
-					log.Printf("resolving %v failed: %v", r.Question, err)
-				}
-				continue // fall back to next-slower upstream
-			}
-		}
 		w.WriteMsg(in)
 		if idx > 0 {
-			// re-order this upstream to the front of s.upstream.
-			s.upstreamMu.Lock()
-			// if the upstreams were reordered in the meantime leave them alone
-			if s.upstream[idx] == u {
-				s.upstream = append(append([]string{u}, s.upstream[:idx]...), s.upstream[idx+1:]...)
-			}
-			s.upstreamMu.Unlock()
+			s.updateUpstreams(u)
 		}
 		return
 	}
