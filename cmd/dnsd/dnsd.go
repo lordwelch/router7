@@ -89,7 +89,11 @@ func logic() error {
 	if err != nil {
 		return err
 	}
-	srv := dns.NewServer(ip.String()+":53", *domain, dns.Upstreams{})
+	var upstreams dns.Upstreams
+	if buf, err := os.ReadFile("/perm/upstreams.json"); err == nil {
+		json.Unmarshal(buf, &upstreams)
+	}
+	srv := dns.NewServer(ip.String()+":53", *domain, upstreams)
 	readLeases := func() error {
 		b, err := os.ReadFile("/perm/dhcp4d/leases.json")
 		if err != nil {
