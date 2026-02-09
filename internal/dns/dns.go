@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/rtr7/router7/internal/dhcp4d"
+	"github.com/rtr7/router7/internal/diag"
 	"github.com/rtr7/router7/internal/teelogger"
 
 	"github.com/miekg/dns"
@@ -281,25 +282,17 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 	}
 }
 
-func mustParseCIDR(s string) *net.IPNet {
-	_, ipnet, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return ipnet
-}
-
 var (
 	localNets = []*net.IPNet{
 		// loopback: https://tools.ietf.org/html/rfc3330#section-2
-		mustParseCIDR("127.0.0.0/8"),
+		diag.MustParseCIDR("127.0.0.0/8"),
 		// loopback: https://tools.ietf.org/html/rfc3513#section-2.4
-		mustParseCIDR("::1/128"),
+		diag.MustParseCIDR("::1/128"),
 
 		// reversed: https://tools.ietf.org/html/rfc1918#section-3
-		mustParseCIDR("10.0.0.0/8"),
-		mustParseCIDR("172.16.0.0/12"),
-		mustParseCIDR("192.168.0.0/16"),
+		diag.MustParseCIDR("10.0.0.0/8"),
+		diag.MustParseCIDR("172.16.0.0/12"),
+		diag.MustParseCIDR("192.168.0.0/16"),
 	}
 )
 

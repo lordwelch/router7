@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rtr7/router7/internal/diag"
+
 	"github.com/google/go-cmp/cmp"
 	"github.com/insomniacslk/dhcp/dhcpv6"
 	"github.com/rtr7/router7/internal/testing/pcapreplayer"
@@ -38,7 +40,7 @@ func TestDHCP6(t *testing.T) {
 			CaptureFile: "fiber7.pcap",
 			SolicitTID:  dhcpv6.TransactionID{0x48, 0xe5, 0x9e},
 			RequestTID:  dhcpv6.TransactionID{0x73, 0x8c, 0x3b},
-			Prefix:      mustParseCIDR("2a02:168:4a00::/48"),
+			Prefix:      *diag.MustParseCIDR("2a02:168:4a00::/48"),
 			Expiry:      20 * time.Minute,
 		},
 
@@ -46,7 +48,7 @@ func TestDHCP6(t *testing.T) {
 			CaptureFile: "fiber7-2019-12-02.pcap",
 			SolicitTID:  dhcpv6.TransactionID{0x49, 0xb4, 0x8c},
 			RequestTID:  dhcpv6.TransactionID{0x49, 0xb4, 0x8c},
-			Prefix:      mustParseCIDR("2a02:168:4bf3::/48"),
+			Prefix:      *diag.MustParseCIDR("2a02:168:4bf3::/48"),
 			Expiry:      1000 * time.Second,
 		},
 	} {
@@ -102,12 +104,4 @@ func TestDHCP6(t *testing.T) {
 			}
 		})
 	}
-}
-
-func mustParseCIDR(s string) net.IPNet {
-	_, net, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return *net
 }

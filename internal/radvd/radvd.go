@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/mdlayher/ndp"
+	"github.com/rtr7/router7/internal/diag"
 
 	"golang.org/x/net/ipv6"
 )
@@ -122,13 +123,7 @@ func (s *Server) ListenAndServe(ifname string) error {
 	return s.Serve(ifname, conn)
 }
 
-var ipv6LinkLocal = func(cidr string) *net.IPNet {
-	_, net, err := net.ParseCIDR(cidr)
-	if err != nil {
-		panic(err)
-	}
-	return net
-}("fe80::/10")
+var ipv6LinkLocal = diag.MustParseCIDR("fe80::/10")
 
 func (s *Server) sendAdvertisement(addr net.Addr) error {
 	s.mu.Lock()
