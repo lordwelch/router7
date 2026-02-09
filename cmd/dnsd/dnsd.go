@@ -107,6 +107,17 @@ func logic() error {
 			}
 		}
 		srv.SetLeases(append(leases, radvdAddresses...))
+
+		b, err = os.ReadFile("/perm/dns.json")
+		if err != nil {
+			log.Printf("cannot read DNS entries: %v", err)
+			return nil
+		}
+		var dnsE []dns.DNS
+		if err := json.Unmarshal(b, &dnsE); err != nil {
+			return nil
+		}
+		srv.SetDNSEntries(dnsE)
 		return nil
 	}
 	if err := readLeases(); err != nil {

@@ -53,6 +53,11 @@ type IP struct {
 	IPv6 net.IP
 }
 
+type DNS struct {
+	IP
+	Host string
+}
+
 type DNSClient struct {
 	udp    *dns.Client
 	tcp    *dns.Client
@@ -424,9 +429,54 @@ func (s *Server) PrometheusHandler() http.Handler {
 	return promhttp.HandlerFor(s.prom.registry, promhttp.HandlerOpts{})
 }
 
+func (s *Server) topLevelHandler(host string, w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("net.SplitHostPort(%q): %v\n", r.RemoteAddr, err), http.StatusBadRequest)
+		return
+	}
+	rev, err := dns.ReverseAddr(remote)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("dns.ReverseAddr(%v): %v\n", remote, err), http.StatusBadRequest)
+		return
+	}
+	hostname, ok := s.hostsByIP[rev]
+	if !ok {
+		err := fmt.Sprintf("connection without corresponding DHCP lease: %v\n", rev)
+		http.Error(w, err, http.StatusForbidden)
+		return
+	}
+	// This is a top level item we only allow a single label
+	host, _, _ = strings.Cut(strings.ToLower(host), ".")
+
+	ip, ok := s.hostsByName[lcHostname(strings.ToLower(hostname))]
+	if !ok {
+		http.Error(w, fmt.Sprintf("\n"), http.StatusForbidden)
+		w.Write([]byte("Unable to find dhcp lease\n"))
+		return
+	}
+	log.Printf("%s requesting dns %v -> %v", hostname, host, ip)
+	// Error if it looks like it's trying to take an existing dhcp lease
+	if existing_ip, ok := s.hostsByName[lcHostname(host)]; ok && !ip.IPv4.Equal(existing_ip.IPv4) {
+		http.Error(w, fmt.Sprintf("Host is alread set(%v): %v\n", remote, err), http.StatusBadRequest)
+		return
+	}
+	s.hostsByName[lcHostname(host)] = ip
+	s.Mux.HandleFunc(host+".", s.subnameHandler(host))
+	s.Mux.HandleFunc(host+"."+s.domain+".", s.subnameHandler(host))
+	w.Write([]byte("ok\n"))
+}
+
 func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 	host := r.FormValue("host")
-	ip := net.ParseIP(r.FormValue("ip"))
+	ips := r.FormValue("ip")
+	if ips == "" || strings.HasPrefix(r.RemoteAddr, ips+":") {
+		s.topLevelHandler(host, w, r)
+		return
+	}
+	ip := net.ParseIP(ips)
 	if ip == nil {
 		http.Error(w, "invalid ip", http.StatusBadRequest)
 		return
@@ -570,6 +620,45 @@ var (
 	l4, _ = dns.NewRR("localhost. 3600 IN A 127.0.0.1")
 	l6, _ = dns.NewRR("localhost. 3600 IN AAAA ::1")
 )
+
+func (s *Server) SetDNSEntries(dnsEntries []DNS) {
+	for _, entry := range dnsEntries {
+		hostname := strings.TrimRight(strings.ToLower(entry.Host), ".")
+		handler := func(w dns.ResponseWriter, r *dns.Msg) {
+			if len(r.Question) != 1 {
+				return
+			}
+			q := r.Question[0]
+			if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domain+"." {
+				rr, re := entry.ToRRSet(q.Name, q.Qtype)
+				if len(rr) < 1 {
+					m := new(dns.Msg)
+					m.SetReply(r)
+					m.Extra = append(m.Extra, re...)
+					m.RecursionAvailable = true
+					w.WriteMsg(m)
+					return
+				}
+				m := new(dns.Msg)
+				m.SetReply(r)
+				m.RecursionAvailable = true
+				m.Answer = append(m.Answer, rr...)
+				m.Extra = append(m.Extra, re...)
+				w.WriteMsg(m)
+				return
+			}
+			log.Printf("This shouldn't happen: dns entry %q: dns Query: %s", hostname, r)
+			// Send an authoritative NXDOMAIN for local names:
+			m := new(dns.Msg)
+			m.RecursionAvailable = true
+			m.SetReply(r)
+			m.SetRcode(r, dns.RcodeNameError)
+			w.WriteMsg(m)
+		}
+		s.Mux.HandleFunc(hostname+".", handler)
+		s.Mux.HandleFunc(hostname+"."+s.domain+".", handler)
+	}
+}
 
 func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 	if q.Qclass != dns.ClassINET {
@@ -737,11 +826,8 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 	if q.Qtype == dns.TypeA ||
 		q.Qtype == dns.TypeAAAA ||
 		q.Qtype == dns.TypeMX {
-		name := strings.TrimSuffix(q.Name, "."+hostname+".")
-		name = strings.TrimSuffix(name, "."+hostname+"."+s.domain+".")
 
-		if lower := strings.ToLower(q.Name); lower == hostname+"." ||
-			lower == hostname+"."+s.domain+"." {
+		if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domain+"." {
 			host, ok := s.hostByName(hostname)
 			if !ok {
 				// The corresponding DHCP lease might have expired, but this
@@ -753,6 +839,9 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 			}
 			return nil, nil, errEmpty
 		}
+
+		name := strings.TrimSuffix(q.Name, "."+hostname+".")
+		name = strings.TrimSuffix(name, "."+hostname+"."+s.domain+".")
 		if ip, ok := s.subname(hostname, name); ok {
 			rr, re := ip.ToRRSet(q.Name, q.Qtype)
 			if len(rr) > 0 {
