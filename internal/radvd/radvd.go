@@ -16,15 +16,22 @@
 package radvd
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mdlayher/ndp"
+	"github.com/rtr7/router7/internal/dhcp4d"
 	"github.com/rtr7/router7/internal/diag"
+	"github.com/rtr7/router7/internal/notify"
 
 	"golang.org/x/net/ipv6"
 )
@@ -36,10 +43,104 @@ type Server struct {
 	mu       sync.Mutex
 	prefixes []net.IPNet
 	iface    *net.Interface
+
+	knownAddresses map[string]dhcp4d.Lease
 }
 
 func NewServer() (*Server, error) {
-	return &Server{}, nil
+	return &Server{
+		knownAddresses: make(map[string]dhcp4d.Lease),
+	}, nil
+}
+func getLeases() (map[string]string, error) {
+	f, err := os.Open("/perm/dhcp4d/leases.json")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	jd := json.NewDecoder(f)
+
+	var leases []dhcp4d.Lease
+	if err := jd.Decode(&leases); err != nil {
+		return nil, err
+	}
+	// Map MAC Addresses to hostnames for ipv6
+	byMac := make(map[string]string, len(leases))
+	for _, lease := range leases {
+		byMac[lease.HardwareAddr] = lease.Hostname
+	}
+	return byMac, nil
+}
+
+func (s *Server) UpdateDNS(b []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	leases, err := getLeases()
+	if err == nil {
+		for _, address := range s.knownAddresses {
+			if address.Hostname != "" {
+				continue
+			}
+			address.Hostname = leases[address.HardwareAddr]
+		}
+	}
+	m, err := ndp.ParseMessage(b)
+	if err != nil {
+		return err
+	}
+	if m.Type() != ipv6.ICMPTypeNeighborAdvertisement {
+		return fmt.Errorf("incorrect icmp message recieved expected %s, got %s", ipv6.ICMPTypeNeighborAdvertisement, m.Type())
+	}
+	n := m.(*ndp.NeighborAdvertisement)
+	var hw net.HardwareAddr
+	for _, o := range n.Options {
+		if o.Code() == uint8(ndp.Target) {
+			ll := o.(*ndp.LinkLayerAddress)
+			hw = ll.Addr
+			break
+		}
+	}
+	if hw == nil {
+		// Ignore advertisements that donot provide the MAC
+		log.Printf("Ignoring advertisement(no mac): %v", n)
+		return nil
+	}
+	if !n.Solicited {
+		// Ignore advertisements that are not solicited
+		log.Printf("Ignoring advertisement(is not solicited): %v", n)
+		return nil
+	}
+	if _,ok := leases[hw.String()]; !ok {
+		log.Println("Ignoring advertisement(no dhcp4 lease for mac):", n)
+		return nil
+	}
+	log.Printf("Found IPv6 address %s for MAC address %s (%s)", n.TargetAddress, hw, leases[hw.String()])
+	s.knownAddresses[hw.String()] = dhcp4d.Lease{
+		Addr:         net.IP(n.TargetAddress.AsSlice()),
+		HardwareAddr: hw.String(),
+		LastACK:      time.Now(),
+		Expiry:       time.Now().Add(10 * time.Minute),
+		Hostname:     leases[hw.String()],
+	}
+	addresses := make([]dhcp4d.Lease, 0, len(s.knownAddresses))
+	for _, lease := range s.knownAddresses {
+		addresses = append(addresses, lease)
+	}
+	buf := &bytes.Buffer{}
+	j := json.NewEncoder(buf)
+	j.SetIndent("", "  ")
+	err = j.Encode(addresses)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile("/perm/radvd.addresses.json", buf.Bytes(), 0o600)
+	if err != nil {
+		return err
+	}
+	if err := notify.Process("/user/dnsd", syscall.SIGUSR1); err != nil {
+		log.Printf("notifying dnsd: %v", err)
+	}
+	return nil
 }
 
 func (s *Server) SetPrefixes(prefixes []net.IPNet) {
@@ -76,6 +177,7 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 	var filter ipv6.ICMPFilter
 	filter.SetAll(true)
 	filter.Accept(ipv6.ICMPTypeRouterSolicitation)
+	filter.Accept(ipv6.ICMPTypeNeighborAdvertisement)
 	if err := s.pc.SetICMPFilter(&filter); err != nil {
 		return err
 	}
@@ -95,13 +197,19 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 		if err != nil {
 			return err
 		}
+		if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement {
+			err = s.UpdateDNS(buf[:n])
+			if err != nil {
+				log.Printf("Failed to update dns %v %#v", err, buf[:n])
+			}
+			continue
+		}
 		if !strings.HasSuffix(addr.String(), "%"+ifname) {
-			log.Printf("ignoring off-interface request from %v", addr)
+			log.Println("ignoring off-interface request from", addr.String())
 			continue
 		}
 		// TODO: isn’t this guaranteed by the filter above?
-		if n == 0 ||
-			ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
+		if n == 0 || ipv6.ICMPType(buf[0]) != ipv6.ICMPTypeRouterSolicitation {
 			continue
 		}
 		if err := s.sendAdvertisement(addr); err != nil {

@@ -99,7 +99,14 @@ func logic() error {
 		if err := json.Unmarshal(b, &leases); err != nil {
 			return err
 		}
-		srv.SetLeases(leases)
+		var radvdAddresses []dhcp4d.Lease
+		b, err = os.ReadFile("/perm/radvd.addresses.json")
+		if err == nil {
+			if err := json.Unmarshal(b, &radvdAddresses); err != nil {
+				radvdAddresses = nil
+			}
+		}
+		srv.SetLeases(append(leases, radvdAddresses...))
 		return nil
 	}
 	if err := readLeases(); err != nil {

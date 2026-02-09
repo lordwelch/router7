@@ -22,6 +22,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -46,6 +47,11 @@ var log = teelogger.NewConsole()
 // lcHostname is a string type used for lower-cased hostnames so that the
 // DHCP-based local name resolution can be made case-insensitive.
 type lcHostname string
+
+type IP struct {
+	IPv4 net.IP
+	IPv6 net.IP
+}
 
 type DNSClient struct {
 	udp    *dns.Client
@@ -140,14 +146,99 @@ type Server struct {
 		questions prometheus.Histogram
 	}
 
-	mu           sync.Mutex
-	hostname, ip string
-	hostsByName  map[lcHostname]string
-	hostsByIP    map[string]string
-	subnames     map[lcHostname]map[string]net.IP // hostname → subname → ip
+	mu          sync.Mutex
+	hostname    string
+	ip          IP
+	hostsByName map[lcHostname]IP
+	hostsByIP   map[string]string            // reverse ip notation -> hostname
+	subnames    map[lcHostname]map[string]IP // hostname → subname → ip
 
 	upstreamMu sync.RWMutex
 	upstream   Upstreams
+}
+
+func (ip *IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
+	var (
+		rr  []dns.RR
+		re  []dns.RR
+		r   dns.RR
+		err error
+	)
+	if ip.IPv4 != nil {
+		r, err = dns.NewRR(name + " 3600 IN A " + ip.IPv4.String())
+		if err != nil {
+			panic(err)
+		}
+		if qtype == dns.TypeA {
+			rr = append(rr, r)
+		} else {
+			re = append(re, r)
+		}
+	}
+	if ip.IPv6 != nil {
+		r, err = dns.NewRR(name + " 3600 IN AAAA " + ip.IPv6.String())
+		if err != nil {
+			panic(err)
+		}
+		if qtype == dns.TypeAAAA {
+			rr = append(rr, r)
+		} else {
+			re = append(re, r)
+		}
+	}
+	return rr, re
+}
+
+func FindInterface(ip net.IP) (net.Interface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return net.Interface{}, err
+	}
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipnet.IP.Equal(ip) {
+				return iface, nil
+			}
+		}
+	}
+	return net.Interface{}, errors.New("No ipv6 addr found")
+}
+
+func GetIPv6Address(ip string) net.IP {
+	iface, err := FindInterface(net.ParseIP(ip))
+	if err != nil {
+		return nil
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil
+	}
+	var (
+		linkLocal     netip.Addr
+		ipv6LinkLocal = diag.MustParseCIDR("fe80::/10")
+	)
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipv6LinkLocal.Contains(ipnet.IP) {
+			linkLocal, _ = netip.AddrFromSlice(ipnet.IP)
+			break
+		}
+	}
+	if linkLocal.IsValid() && !linkLocal.IsUnspecified() {
+		return net.IP(linkLocal.AsSlice())
+	}
+	return nil
 }
 
 type Upstreams struct {
@@ -189,8 +280,11 @@ func NewServer(addr, domain string, upstream Upstreams) *Server {
 		upstream:  upstream,
 		sometimes: rate.NewLimiter(rate.Every(1*time.Second), 1), // at most once per second
 		hostname:  hostname,
-		ip:        ip,
-		subnames:  make(map[lcHostname]map[string]net.IP),
+		ip: IP{
+			IPv4: net.ParseIP(ip),
+			IPv6: GetIPv6Address(ip),
+		},
+		subnames: make(map[lcHostname]map[string]IP),
 	}
 	server.prom.registry = prometheus.NewRegistry()
 
@@ -230,12 +324,16 @@ func NewServer(addr, domain string, upstream Upstreams) *Server {
 }
 
 func (s *Server) initHostsLocked() {
-	s.hostsByName = make(map[lcHostname]string)
+	s.hostsByName = make(map[lcHostname]IP)
 	s.hostsByIP = make(map[string]string)
-	if s.hostname != "" && s.ip != "" {
+	if s.hostname != "" && (s.ip.IPv4 != nil || s.ip.IPv6 != nil) {
 		lower := strings.ToLower(s.hostname)
 		s.hostsByName[lcHostname(lower)] = s.ip
-		if rev, err := dns.ReverseAddr(s.ip); err == nil {
+
+		if rev, err := dns.ReverseAddr(s.ip.IPv4.String()); err == nil {
+			s.hostsByIP[rev] = s.hostname
+		}
+		if rev, err := dns.ReverseAddr(s.ip.IPv6.String()); err == nil {
 			s.hostsByIP[rev] = s.hostname
 		}
 		s.Mux.HandleFunc(lower+".", s.subnameHandler(s.hostname))
@@ -301,7 +399,7 @@ func (s *Server) probeUpstreamLatency() {
 	s.upstream = upstreams
 }
 
-func (s *Server) hostByName(n string) (string, bool) {
+func (s *Server) hostByName(n string) (IP, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.hostsByName[lcHostname(strings.ToLower(n))]
@@ -315,7 +413,7 @@ func (s *Server) hostByIP(n string) (string, bool) {
 	return r, ok
 }
 
-func (s *Server) subname(hostname, host string) (net.IP, bool) {
+func (s *Server) subname(hostname, host string) (IP, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.subnames[lcHostname(strings.ToLower(hostname))][host]
@@ -356,13 +454,29 @@ func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s requesting dns %v -> %v", lower, host, ip)
 	subnames, ok := s.subnames[lcHostname(lower)]
 	if !ok {
-		subnames = make(map[string]net.IP)
+		subnames = make(map[string]IP)
 		s.subnames[lcHostname(lower)] = subnames
 	}
-	subnames[host] = ip
+	if ip.To4() != nil {
+		subnames[host] = IP{
+			IPv4: ip,
+			IPv6: subnames[host].IPv6,
+		}
+	} else {
+		subnames[host] = IP{
+			IPv4: subnames[host].IPv4,
+			IPv6: ip,
+		}
+	}
+
 	w.Write([]byte("ok\n"))
 }
-
+func ipType(ip net.IP) int {
+	if ip.To4() == nil {
+		return 6
+	}
+	return 4
+}
 func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -387,10 +501,21 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 			continue
 		}
 		lower := strings.ToLower(l.Hostname)
-		if _, ok := s.hostsByName[lcHostname(lower)]; ok {
-			continue // don’t overwrite e.g. the hostname entry
+		if ip, ok := s.hostsByName[lcHostname(lower)]; ok && ((ipType(l.Addr) == 6 && ip.IPv6 != nil) || (ipType(l.Addr) == 4 && ip.IPv4 != nil)) {
+			continue // don’t overwrite e.g. the hostname entry, but allow a missing ipv4/ipv6
 		}
-		s.hostsByName[lcHostname(lower)] = l.Addr.String()
+		if l.Addr.To4() != nil { // even though this is a dhcpv4 lease we reuse it for ipv6 addresses
+			s.hostsByName[lcHostname(lower)] = IP{
+				IPv4: l.Addr,
+				IPv6: s.hostsByName[lcHostname(lower)].IPv6,
+			}
+		} else {
+			s.hostsByName[lcHostname(lower)] = IP{
+				IPv4: s.hostsByName[lcHostname(lower)].IPv4,
+				IPv6: l.Addr,
+			}
+		}
+
 		if rev, err := dns.ReverseAddr(l.Addr.String()); err == nil {
 			s.hostsByIP[rev] = l.Hostname
 		}
@@ -441,40 +566,60 @@ func isLocalInAddrArpa(q string) bool {
 }
 
 var errEmpty = errors.New("no answers")
+var (
+	l4, _ = dns.NewRR("localhost. 3600 IN A 127.0.0.1")
+	l6, _ = dns.NewRR("localhost. 3600 IN AAAA ::1")
+)
 
-func (s *Server) resolve(q dns.Question) (rr dns.RR, err error) {
+func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 	if q.Qclass != dns.ClassINET {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if strings.ToLower(q.Name) == "localhost." {
-		if q.Qtype == dns.TypeAAAA {
-			return dns.NewRR(q.Name + " 3600 IN AAAA ::1")
-		}
 		if q.Qtype == dns.TypeA {
-			return dns.NewRR(q.Name + " 3600 IN A 127.0.0.1")
+			rr = append(rr, l4)
+			re = append(re, l6)
+		} else {
+			rr = append(rr, l6)
+			re = append(re, l4)
 		}
+		return rr, re, nil
 	}
 	if q.Qtype == dns.TypeA ||
 		q.Qtype == dns.TypeAAAA ||
 		q.Qtype == dns.TypeMX {
 		name := strings.TrimSuffix(q.Name, ".")
 		name = strings.TrimSuffix(name, "."+s.domain)
-		if host, ok := s.hostByName(name); ok {
-			if q.Qtype == dns.TypeA {
-				return dns.NewRR(q.Name + " 3600 IN A " + host)
+		if ip, ok := s.hostByName(name); ok {
+			r, e := ip.ToRRSet(q.Name, q.Qtype)
+			rr = append(rr, r...)
+			re = append(re, e...)
+			if len(rr) == 0 {
+				return nil, nil, errEmpty
 			}
-			return nil, errEmpty
+
+			return rr, re, nil
 		}
 	}
 	if q.Qtype == dns.TypePTR {
 		if host, ok := s.hostByIP(q.Name); ok {
-			return dns.NewRR(q.Name + " 3600 IN PTR " + host + "." + s.domain)
+			r, err := dns.NewRR(q.Name + " 3600 IN PTR " + host + "." + s.domain)
+			if err != nil {
+				return nil, nil, err
+			}
+			rr = append(rr, r)
+			return rr, re, nil
 		}
 		if strings.HasSuffix(q.Name, "127.in-addr.arpa.") {
-			return dns.NewRR(q.Name + " 3600 IN PTR localhost.")
+			r, err := dns.NewRR(q.Name + " 3600 IN PTR localhost.")
+			if err != nil {
+				return nil, nil, err
+			}
+			rr = append(rr, r)
+			return rr, re, nil
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
@@ -484,22 +629,24 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) != 1 { // TODO: answer all questions we can answer
 		return
 	}
-	rr, err := s.resolve(r.Question[0])
+	rr, re, err := s.resolve(r.Question[0])
 	if err != nil {
 		if err == errEmpty {
 			m := new(dns.Msg)
 			m.SetReply(r)
+			m.Extra = append(m.Extra, re...)
 			m.RecursionAvailable = true
 			w.WriteMsg(m)
 			return
 		}
-		log.Fatal(err)
+		log.Fatal("Failed to resolve internal host", err)
 	}
-	if rr != nil {
+	if len(rr) > 0 {
 		m := new(dns.Msg)
 		m.SetReply(r)
 		m.RecursionAvailable = true
-		m.Answer = append(m.Answer, rr)
+		m.Answer = append(m.Answer, rr...)
+		m.Extra = append(m.Extra, re...)
 		w.WriteMsg(m)
 		return
 	}
@@ -509,6 +656,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	m.RecursionAvailable = true
 	m.SetRcode(r, dns.RcodeNameError)
 	w.WriteMsg(m)
+	return
 }
 
 func (s *Server) upstreams() Upstreams {
@@ -582,9 +730,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// DNS has no reply for resolving errors
 }
 
-func (s *Server) resolveSubname(hostname string, q dns.Question) (dns.RR, error) {
+func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dns.RR, error) {
 	if q.Qclass != dns.ClassINET {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if q.Qtype == dns.TypeA ||
 		q.Qtype == dns.TypeAAAA ||
@@ -598,25 +746,22 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) (dns.RR, error)
 			if !ok {
 				// The corresponding DHCP lease might have expired, but this
 				// handler is still installed on the mux.
-				return nil, nil // NXDOMAIN
+				return nil, nil, nil // NXDOMAIN
 			}
-			if q.Qtype == dns.TypeA {
-				return dns.NewRR(q.Name + " 3600 IN A " + host)
+			if rr, re := host.ToRRSet(q.Name, q.Qtype); len(rr) > 0 {
+				return rr, re, nil
 			}
-			return nil, errEmpty
+			return nil, nil, errEmpty
 		}
-
 		if ip, ok := s.subname(hostname, name); ok {
-			if q.Qtype == dns.TypeA && ip.To4() != nil {
-				return dns.NewRR(q.Name + " 3600 IN A " + ip.String())
+			rr, re := ip.ToRRSet(q.Name, q.Qtype)
+			if len(rr) > 0 {
+				return rr, re, nil
 			}
-			if q.Qtype == dns.TypeAAAA && ip.To4() == nil {
-				return dns.NewRR(q.Name + " 3600 IN AAAA " + ip.String())
-			}
-			return nil, errEmpty
+			return nil, nil, errEmpty
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *dns.Msg) {
@@ -625,22 +770,24 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 			return
 		}
 
-		rr, err := s.resolveSubname(hostname, r.Question[0])
+		rr, re, err := s.resolveSubname(hostname, r.Question[0])
 		if err != nil {
 			if err == errEmpty {
 				m := new(dns.Msg)
 				m.SetReply(r)
 				m.RecursionAvailable = true
+				m.Extra = append(m.Extra, re...)
 				w.WriteMsg(m)
 				return
 			}
 			log.Fatalf("question %#v: %v", r.Question[0], err)
 		}
-		if rr != nil {
+		if len(rr) > 0 {
 			m := new(dns.Msg)
 			m.SetReply(r)
 			m.RecursionAvailable = true
-			m.Answer = append(m.Answer, rr)
+			m.Answer = append(m.Answer, rr...)
+			m.Extra = append(m.Extra, re...)
 			w.WriteMsg(m)
 			return
 		}
@@ -648,6 +795,7 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 		m := new(dns.Msg)
 		m.RecursionAvailable = true
 		m.SetReply(r)
+		m.Extra = append(m.Extra, re...)
 		m.SetRcode(r, dns.RcodeNameError)
 		w.WriteMsg(m)
 	}
