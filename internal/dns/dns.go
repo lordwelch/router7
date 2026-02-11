@@ -39,6 +39,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/idna"
 	"golang.org/x/time/rate"
 )
 
@@ -556,6 +557,12 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 		if ip, ok := s.hostsByName[lcHostname(lower)]; ok && ((ipType(l.Addr) == 6 && ip.IPv6 != nil) || (ipType(l.Addr) == 4 && ip.IPv4 != nil)) {
 			continue // don’t overwrite e.g. the hostname entry, but allow a missing ipv4/ipv6
 		}
+		_, err := idna.Registration.ToASCII(lower)
+		if err != nil && !strings.Contains(lower, " ") {
+			log.Println("Unable to register", l.Hostname, "in dns", err)
+			continue
+		}
+		log.Println("Registering:",l)
 		if l.Addr.To4() != nil { // even though this is a dhcpv4 lease we reuse it for ipv6 addresses
 			s.hostsByName[lcHostname(lower)] = IP{
 				IPv4: l.Addr,
@@ -706,11 +713,12 @@ func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 	if q.Qtype == dns.TypePTR {
 		if host, ok := s.hostByIP(q.Name); ok {
 			r, err := dns.NewRR(q.Name + " 3600 IN PTR " + host + "." + s.domain)
-			if err != nil {
-				return nil, nil, err
+			if err == nil {
+				rr = append(rr, r)
+				return rr, re, nil
 			}
-			rr = append(rr, r)
-			return rr, re, nil
+			log.Println("Failed to create reverse record for host: ", host)
+			return nil, nil, nil
 		}
 		if strings.HasSuffix(q.Name, "127.in-addr.arpa.") {
 			r, err := dns.NewRR(q.Name + " 3600 IN PTR localhost.")
