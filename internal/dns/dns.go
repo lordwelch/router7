@@ -294,7 +294,7 @@ func NewServer(addr string, domains []string, upstream Upstreams) *Server {
 		hostname:  hostname,
 		ip: IP{
 			IPv4: net.ParseIP(ip),
-			IPv6: GetIPv6Address(ip),
+			IPv6: GetIPv6Address(ip), // TODO: IPv6 doesn't work for some reason
 		},
 		subnames: make(map[lcHostname]map[string]IP),
 		aliases:   make(map[lcHostname]lcHostname),
