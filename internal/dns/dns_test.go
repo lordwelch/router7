@@ -52,7 +52,7 @@ func (r *recorder) Hijack()                   {}
 
 func TestNXDOMAIN(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("localhost:0", "lan", Upstreams{})
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{})
 	m := new(dns.Msg)
 	m.SetQuestion("foo.invalid.", dns.TypeA)
 	s.Mux.ServeDNS(r, m)
@@ -63,7 +63,7 @@ func TestNXDOMAIN(t *testing.T) {
 
 func TestResolveError(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("localhost:0", "lan", Upstreams{Primary: []string{"266.266.266.266:53"}})
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{Primary: []string{"266.266.266.266:53"}})
 	m := new(dns.Msg)
 	m.SetQuestion("foo.invalid.", dns.TypeA)
 	s.Mux.ServeDNS(r, m)
@@ -73,7 +73,7 @@ func TestResolveError(t *testing.T) {
 }
 
 func TestResolveFallback(t *testing.T) {
-	s := NewServer("localhost:0", "lan", Upstreams{Primary: []string{
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{Primary: []string{
 		"266.266.266.266:53",
 		dnsServerAddr(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 			reply(w, r, " 3600 IN A 127.0.0.1")
@@ -97,7 +97,7 @@ func dnsServerAddr(t *testing.T, h dns.Handler) string {
 
 func TestResolveFallbackOnce(t *testing.T) {
 	var slowHits uint32
-	s := NewServer("localhost:0", "lan", Upstreams{Primary: []string{
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{Primary: []string{
 		dnsServerAddr(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 			atomic.AddUint32(&slowHits, 1)
 			// trigger fallback by sending no reply
@@ -128,7 +128,7 @@ func reply(w dns.ResponseWriter, r *dns.Msg, response string) {
 
 func TestResolveLatencySteering(t *testing.T) {
 	var slowHits uint32
-	s := NewServer("localhost:0", "lan", Upstreams{Primary: []string{
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{Primary: []string{
 		dnsServerAddr(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 			atomic.AddUint32(&slowHits, 1)
 			time.Sleep(10 * time.Millisecond)
@@ -156,7 +156,7 @@ func TestResolveLatencySteering(t *testing.T) {
 
 func TestDHCP(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("localhost:0", "lan", Upstreams{})
+	s := NewServer("localhost:0", []string{"lan"}, Upstreams{})
 	s.SetLeases([]dhcp4d.Lease{
 		{
 			Hostname: "testtarget",
@@ -229,7 +229,7 @@ func TestHostname(t *testing.T) {
 	}
 
 	r := &recorder{}
-	s := NewServer("127.0.0.2:0", "lan", Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
 	s.SetLeases([]dhcp4d.Lease{
 		{
 			Hostname: strings.ToUpper(hostname),
@@ -329,7 +329,7 @@ func TestHostnameDHCP(t *testing.T) {
 	}
 
 	r := &recorder{}
-	s := NewServer("127.0.0.2:0", "lan", Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
 
 	t.Run("A", func(t *testing.T) {
 		m := new(dns.Msg)
@@ -378,7 +378,7 @@ func TestHostnameDHCP(t *testing.T) {
 
 func TestLocalhost(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("127.0.0.2:0", "lan", Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
 
 	t.Run("A", func(t *testing.T) {
 		m := new(dns.Msg)
@@ -456,7 +456,7 @@ func TestDHCPReverse(t *testing.T) {
 	} {
 		t.Run(test.question, func(t *testing.T) {
 			r := &recorder{}
-			s := NewServer("localhost:0", "lan", Upstreams{})
+			s := NewServer("localhost:0", []string{"lan"}, Upstreams{})
 			s.SetLeases([]dhcp4d.Lease{
 				{
 					Hostname: "testtarget",
@@ -481,7 +481,7 @@ func TestDHCPReverse(t *testing.T) {
 
 	t.Run("no leases", func(t *testing.T) {
 		r := &recorder{}
-		s := NewServer("localhost:0", "lan", Upstreams{})
+		s := NewServer("localhost:0", []string{"lan"}, Upstreams{})
 		m := new(dns.Msg)
 		m.SetQuestion("254.255.31.172.in-addr.arpa.", dns.TypePTR)
 		s.Mux.ServeDNS(r, m)
@@ -529,7 +529,7 @@ func resolveTestTarget(s *Server, name string, want net.IP) error {
 // TODO: multiple questions
 
 func TestUppercase(t *testing.T) {
-	s := NewServer("127.0.0.2:0", "lan", Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
 	s.SetLeases([]dhcp4d.Lease{
 		{
 			Hostname: "UPPERCASE",
@@ -549,7 +549,7 @@ func TestUppercase(t *testing.T) {
 
 func TestSubname(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("127.0.0.2:0", "lan", Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
 	s.SetLeases([]dhcp4d.Lease{
 		{
 			Hostname: "testtarget",

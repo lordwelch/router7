@@ -143,7 +143,7 @@ func (d *DNSClient) Exchange(m *dns.Msg, address string, clientInfo map[string]s
 type Server struct {
 	Mux       *dns.ServeMux
 	client    *DNSClient
-	domain    string
+	domains    []string
 	sometimes *rate.Limiter
 	prom      struct {
 		registry  *prometheus.Registry
@@ -253,8 +253,13 @@ type Upstreams struct {
 	Secondary []string
 }
 
-func NewServer(addr, domain string, upstream Upstreams) *Server {
-	domain = strings.ToLower(domain)
+func NewServer(addr string, domains []string, upstream Upstreams) *Server {
+	if len (domains) ==0 {
+		domains = []string{"lan"}
+	}
+	for i := range domains {
+		domains[i] = strings.ToLower(domains[i])
+	}
 	hostname, _ := os.Hostname()
 	ip, _, _ := net.SplitHostPort(addr)
 	if len(upstream.Primary) < 1 {
@@ -283,7 +288,7 @@ func NewServer(addr, domain string, upstream Upstreams) *Server {
 	server := &Server{
 		Mux:       dns.NewServeMux(),
 		client:    NewDNSClient(dohMap),
-		domain:    domain,
+		domains:    domains,
 		upstream:  upstream,
 		sometimes: rate.NewLimiter(rate.Every(1*time.Second), 1), // at most once per second
 		hostname:  hostname,
@@ -345,7 +350,9 @@ func (s *Server) initHostsLocked() {
 			s.hostsByIP[rev] = s.hostname
 		}
 		s.Mux.HandleFunc(lower+".", s.subnameHandler(s.hostname))
-		s.Mux.HandleFunc(lower+"."+s.domain+".", s.subnameHandler(s.hostname))
+		for _,domain := range s.domains {
+			s.Mux.HandleFunc(lower+"."+domain+".", s.subnameHandler(s.hostname))
+		}
 	}
 }
 
@@ -468,7 +475,9 @@ func (s *Server) topLevelHandler(host string, w http.ResponseWriter, r *http.Req
 	}
 	s.aliases[lcHostname(host)] = lcHostname(strings.ToLower(hostname))
 	s.Mux.HandleFunc(host+".", s.subnameHandler(host))
-	s.Mux.HandleFunc(host+"."+s.domain+".", s.subnameHandler(host))
+	for _, domain := range s.domains {
+		s.Mux.HandleFunc(host+"."+domain+".", s.subnameHandler(host))
+	}
 	w.Write([]byte("ok\n"))
 }
 
@@ -579,7 +588,9 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 			s.hostsByIP[rev] = l.Hostname
 		}
 		s.Mux.HandleFunc(lower+".", s.subnameHandler(lower))
-		s.Mux.HandleFunc(lower+"."+s.domain+".", s.subnameHandler(lower))
+		for _, domain := range s.domains {
+			s.Mux.HandleFunc(lower+"."+domain+".", s.subnameHandler(lower))
+		}
 	}
 }
 
@@ -638,7 +649,9 @@ func (s *Server) SetDNSEntries(dnsEntries []DNS) {
 				return
 			}
 			q := r.Question[0]
-			if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domain+"." {
+			// I don't feel like making it apply for all domains
+			// I can always write out the domain in the config file
+			if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domains[0]+"." {
 				rr, re := entry.ToRRSet(q.Name, q.Qtype)
 				if len(rr) < 1 {
 					m := new(dns.Msg)
@@ -665,7 +678,9 @@ func (s *Server) SetDNSEntries(dnsEntries []DNS) {
 			w.WriteMsg(m)
 		}
 		s.Mux.HandleFunc(hostname+".", handler)
-		s.Mux.HandleFunc(hostname+"."+s.domain+".", handler)
+		for _, domain := range s.domains {
+			s.Mux.HandleFunc(hostname+"."+domain+".", handler)
+		}
 	}
 }
 
@@ -687,7 +702,9 @@ func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 		q.Qtype == dns.TypeAAAA ||
 		q.Qtype == dns.TypeMX {
 		name := strings.TrimSuffix(q.Name, ".")
-		name = strings.TrimSuffix(name, "."+s.domain)
+		for _, domain := range s.domains {
+			name = strings.TrimSuffix(name, "."+domain)
+		}
 
 		if ip, ok := s.hostByName(name); ok {
 			r, e := ip.ToRRSet(q.Name, q.Qtype)
@@ -712,7 +729,7 @@ func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 	}
 	if q.Qtype == dns.TypePTR {
 		if host, ok := s.hostByIP(q.Name); ok {
-			r, err := dns.NewRR(q.Name + " 3600 IN PTR " + host + "." + s.domain)
+			r, err := dns.NewRR(q.Name + " 3600 IN PTR " + host + "." + s.domains[0])
 			if err == nil {
 				rr = append(rr, r)
 				return rr, re, nil
@@ -847,8 +864,11 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 	if q.Qtype == dns.TypeA ||
 		q.Qtype == dns.TypeAAAA ||
 		q.Qtype == dns.TypeMX {
-
-		if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domain+"." {
+		name := strings.TrimSuffix(q.Name, ".")
+		for _, domain := range s.domains {
+			name = strings.TrimSuffix(name, "."+domain)
+		}
+		if lower := strings.ToLower(name); lower == hostname {
 			host, ok := s.hostByName(hostname)
 			if !ok {
 
@@ -870,8 +890,7 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 			return nil, nil, errEmpty
 		}
 
-		name := strings.TrimSuffix(q.Name, "."+hostname+".")
-		name = strings.TrimSuffix(name, "."+hostname+"."+s.domain+".")
+		name = strings.TrimSuffix(name, "."+hostname)
 		if ip, ok := s.subname(hostname, name); ok {
 			rr, re := ip.ToRRSet(q.Name, q.Qtype)
 			if len(rr) > 0 {
