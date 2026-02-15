@@ -157,6 +157,7 @@ type Server struct {
 	hostsByName map[lcHostname]IP
 	hostsByIP   map[string]string            // reverse ip notation -> hostname
 	subnames    map[lcHostname]map[string]IP // hostname → subname → ip
+	aliases      map[lcHostname]lcHostname
 
 	upstreamMu sync.RWMutex
 	upstream   Upstreams
@@ -290,6 +291,7 @@ func NewServer(addr, domain string, upstream Upstreams) *Server {
 			IPv6: GetIPv6Address(ip),
 		},
 		subnames: make(map[lcHostname]map[string]IP),
+		aliases:   make(map[lcHostname]lcHostname),
 	}
 	server.prom.registry = prometheus.NewRegistry()
 
@@ -463,7 +465,7 @@ func (s *Server) topLevelHandler(host string, w http.ResponseWriter, r *http.Req
 		http.Error(w, fmt.Sprintf("Host is alread set(%v): %v\n", remote, err), http.StatusBadRequest)
 		return
 	}
-	s.hostsByName[lcHostname(host)] = ip
+	s.aliases[lcHostname(host)] = lcHostname(strings.ToLower(hostname))
 	s.Mux.HandleFunc(host+".", s.subnameHandler(host))
 	s.Mux.HandleFunc(host+"."+s.domain+".", s.subnameHandler(host))
 	w.Write([]byte("ok\n"))
@@ -679,7 +681,18 @@ func (s *Server) resolve(q dns.Question) (rr []dns.RR, re []dns.RR, err error) {
 		q.Qtype == dns.TypeMX {
 		name := strings.TrimSuffix(q.Name, ".")
 		name = strings.TrimSuffix(name, "."+s.domain)
+
 		if ip, ok := s.hostByName(name); ok {
+			r, e := ip.ToRRSet(q.Name, q.Qtype)
+			rr = append(rr, r...)
+			re = append(re, e...)
+			if len(rr) == 0 {
+				return nil, nil, errEmpty
+			}
+
+			return rr, re, nil
+		}
+		if ip, ok := s.hostByName(string(s.aliases[lcHostname(name)])); ok {
 			r, e := ip.ToRRSet(q.Name, q.Qtype)
 			rr = append(rr, r...)
 			re = append(re, e...)
@@ -830,6 +843,15 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 		if lower := strings.ToLower(q.Name); lower == hostname+"." || lower == hostname+"."+s.domain+"." {
 			host, ok := s.hostByName(hostname)
 			if !ok {
+
+				if ip, ok := s.hostByName(string(s.aliases[lcHostname(hostname)])); ok {
+					r, e := ip.ToRRSet(q.Name, q.Qtype)
+					if len(r) == 0 {
+						return nil, nil, errEmpty
+					}
+
+					return r, e, nil
+				}
 				// The corresponding DHCP lease might have expired, but this
 				// handler is still installed on the mux.
 				return nil, nil, nil // NXDOMAIN
