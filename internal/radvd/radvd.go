@@ -110,7 +110,7 @@ func (s *Server) UpdateDNS(b []byte) error {
 		log.Printf("Ignoring advertisement(is not solicited): %v", n)
 		return nil
 	}
-	if _,ok := leases[hw.String()]; !ok {
+	if _, ok := leases[hw.String()]; !ok {
 		log.Println("Ignoring advertisement(no dhcp4 lease for mac):", n)
 		return nil
 	}

@@ -489,7 +489,6 @@ func TestDHCPReverse(t *testing.T) {
 			t.Fatalf("unexpected rcode: got %v, want %v", got, want)
 		}
 	})
-
 }
 
 func resolveTestTarget(s *Server, name string, want net.IP) error {
@@ -549,7 +548,9 @@ func TestUppercase(t *testing.T) {
 
 func TestSubname(t *testing.T) {
 	r := &recorder{}
-	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{})
+	s := NewServer("127.0.0.2:0", []string{"lan"}, Upstreams{Primary: []string{dnsServerAddr(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		reply(w, r, " 3600 IN A 127.0.0.1")
+	}))}})
 	s.SetLeases([]dhcp4d.Lease{
 		{
 			Hostname: "testtarget",
@@ -572,9 +573,9 @@ func TestSubname(t *testing.T) {
 		}
 	})
 
-	setSubname := func(ip, remoteAddr string) {
+	setSubname := func(host, ip, remoteAddr string) {
 		val := url.Values{
-			"host": []string{"sub"},
+			"host": []string{host},
 			"ip":   []string{ip},
 		}
 		req := httptest.NewRequest("POST", "/dyndns", strings.NewReader(val.Encode()))
@@ -589,7 +590,8 @@ func TestSubname(t *testing.T) {
 		}
 	}
 	const ip = "fdf5:3606:2a21:1341:b26e:bfff:fe30:504b"
-	setSubname(ip, "192.168.42.23:1234")
+	setSubname("sub", ip, "192.168.42.23:1234")
+	setSubname("cloud", "", "192.168.42.23:1234")
 
 	for _, name := range []string{
 		"sub.testtarget.lan.",
@@ -602,6 +604,26 @@ func TestSubname(t *testing.T) {
 		})
 	}
 
+	t.Run("tld", func(t *testing.T) {
+		if err := resolveTestTarget(s, "cloud.", net.ParseIP("192.168.42.23")); err != nil {
+			t.Fatal(err)
+		}
+		// Should go to upstream
+		if err := resolveTestTarget(s, "hetzner.cloud.", net.ParseIP("127.0.0.1")); err != nil {
+			t.Fatal(err)
+		}
+		// We want to deny hetzner.cloud.lan. because the tld here is local
+		// specifically this is because I have a local device with a `cloud` alias so I can use `cloud.domain.tld`
+		// however dns allows us to resolve it with a single label but `cloud` is also a tld
+		// and I specifically use hetzner.cloud so it needs to resolve
+		m := new(dns.Msg)
+		m.SetQuestion("hetzner.cloud.lan.", dns.TypeA)
+		s.Mux.ServeDNS(r, m)
+		if got, want := r.response.Rcode, dns.RcodeNameError; got != want {
+			t.Fatalf("unexpected rcode: got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("Hostname", func(t *testing.T) {
 		hostname, err := os.Hostname()
 		if err != nil {
@@ -610,7 +632,7 @@ func TestSubname(t *testing.T) {
 		if err := resolveTestTarget(s, hostname+".lan.", net.ParseIP("127.0.0.2")); err != nil {
 			t.Fatal(err)
 		}
-		setSubname(ip, "127.0.0.2:1234")
+		setSubname("sub", ip, "127.0.0.2:1234")
 		if err := resolveTestTarget(s, "sub."+hostname+".lan.", net.ParseIP(ip)); err != nil {
 			t.Fatal(err)
 		}

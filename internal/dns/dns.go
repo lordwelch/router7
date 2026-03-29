@@ -66,6 +66,7 @@ type DNSClient struct {
 	dialer *net.Dialer
 	// TODO: Make cache either here or on Server. If on here we also need to allow bypassing the cache here...
 }
+
 var d net.Dialer
 
 func DialContext(preResolved map[string]string) func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -75,8 +76,8 @@ func DialContext(preResolved map[string]string) func(ctx context.Context, networ
 		}
 		return d.DialContext(ctx, network, address)
 	}
-
 }
+
 func NewDNSClient(dohMap map[string]string) *DNSClient {
 	if dohMap == nil {
 		dohMap = make(map[string]string)
@@ -113,7 +114,7 @@ func (d *DNSClient) Exchange(m *dns.Msg, address string, clientInfo map[string]s
 		if err != nil {
 			return nil, -1, err
 		}
-		uri.Fragment=""
+		uri.Fragment = ""
 		values := uri.Query()
 		for key, value := range clientInfo {
 			values.Set(key, value)
@@ -143,7 +144,7 @@ func (d *DNSClient) Exchange(m *dns.Msg, address string, clientInfo map[string]s
 type Server struct {
 	Mux       *dns.ServeMux
 	client    *DNSClient
-	domains    []string
+	domains   []string
 	sometimes *rate.Limiter
 	prom      struct {
 		registry  *prometheus.Registry
@@ -158,7 +159,7 @@ type Server struct {
 	hostsByName map[lcHostname]IP
 	hostsByIP   map[string]string            // reverse ip notation -> hostname
 	subnames    map[lcHostname]map[string]IP // hostname → subname → ip
-	aliases      map[lcHostname]lcHostname
+	aliases     map[lcHostname]lcHostname
 
 	upstreamMu sync.RWMutex
 	upstream   Upstreams
@@ -254,7 +255,7 @@ type Upstreams struct {
 }
 
 func NewServer(addr string, domains []string, upstream Upstreams) *Server {
-	if len (domains) ==0 {
+	if len(domains) == 0 {
 		domains = []string{"lan"}
 	}
 	for i := range domains {
@@ -288,7 +289,7 @@ func NewServer(addr string, domains []string, upstream Upstreams) *Server {
 	server := &Server{
 		Mux:       dns.NewServeMux(),
 		client:    NewDNSClient(dohMap),
-		domains:    domains,
+		domains:   domains,
 		upstream:  upstream,
 		sometimes: rate.NewLimiter(rate.Every(1*time.Second), 1), // at most once per second
 		hostname:  hostname,
@@ -297,7 +298,7 @@ func NewServer(addr string, domains []string, upstream Upstreams) *Server {
 			IPv6: GetIPv6Address(ip), // TODO: IPv6 doesn't work for some reason
 		},
 		subnames: make(map[lcHostname]map[string]IP),
-		aliases:   make(map[lcHostname]lcHostname),
+		aliases:  make(map[lcHostname]lcHostname),
 	}
 	server.prom.registry = prometheus.NewRegistry()
 
@@ -350,7 +351,7 @@ func (s *Server) initHostsLocked() {
 			s.hostsByIP[rev] = s.hostname
 		}
 		s.Mux.HandleFunc(lower+".", s.subnameHandler(s.hostname))
-		for _,domain := range s.domains {
+		for _, domain := range s.domains {
 			s.Mux.HandleFunc(lower+"."+domain+".", s.subnameHandler(s.hostname))
 		}
 	}
@@ -463,17 +464,17 @@ func (s *Server) topLevelHandler(host string, w http.ResponseWriter, r *http.Req
 
 	ip, ok := s.hostsByName[lcHostname(strings.ToLower(hostname))]
 	if !ok {
-		http.Error(w, fmt.Sprintf("\n"), http.StatusForbidden)
-		w.Write([]byte("Unable to find dhcp lease\n"))
+		http.Error(w, "Unable to find dhcp lease\n", http.StatusForbidden)
 		return
 	}
 	log.Printf("%s requesting dns %v -> %v", hostname, host, ip)
 	// Error if it looks like it's trying to take an existing dhcp lease
-	if existing_ip, ok := s.hostsByName[lcHostname(host)]; ok && !ip.IPv4.Equal(existing_ip.IPv4) {
-		http.Error(w, fmt.Sprintf("Host is alread set(%v): %v\n", remote, err), http.StatusBadRequest)
+	if existingIP, ok := s.hostsByName[lcHostname(host)]; ok && !ip.IPv4.Equal(existingIP.IPv4) {
+		http.Error(w, fmt.Sprintf("Host is alread set(%v): %v\n", existingIP, err), http.StatusBadRequest)
 		return
 	}
 	s.aliases[lcHostname(host)] = lcHostname(strings.ToLower(hostname))
+	log.Printf("Alias set %s -> %s", host, strings.ToLower(hostname))
 	s.Mux.HandleFunc(host+".", s.subnameHandler(host))
 	for _, domain := range s.domains {
 		s.Mux.HandleFunc(host+"."+domain+".", s.subnameHandler(host))
@@ -533,12 +534,14 @@ func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Write([]byte("ok\n"))
 }
+
 func ipType(ip net.IP) int {
 	if ip.To4() == nil {
 		return 6
 	}
 	return 4
 }
+
 func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -571,7 +574,7 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 			log.Println("Unable to register", l.Hostname, "in dns", err)
 			continue
 		}
-		log.Println("Registering:",l)
+		log.Println("Registering:", l)
 		if l.Addr.To4() != nil { // even though this is a dhcpv4 lease we reuse it for ipv6 addresses
 			s.hostsByName[lcHostname(lower)] = IP{
 				IPv4: l.Addr,
@@ -594,19 +597,17 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 	}
 }
 
-var (
-	localNets = []*net.IPNet{
-		// loopback: https://tools.ietf.org/html/rfc3330#section-2
-		diag.MustParseCIDR("127.0.0.0/8"),
-		// loopback: https://tools.ietf.org/html/rfc3513#section-2.4
-		diag.MustParseCIDR("::1/128"),
+var localNets = []*net.IPNet{
+	// loopback: https://tools.ietf.org/html/rfc3330#section-2
+	diag.MustParseCIDR("127.0.0.0/8"),
+	// loopback: https://tools.ietf.org/html/rfc3513#section-2.4
+	diag.MustParseCIDR("::1/128"),
 
-		// reversed: https://tools.ietf.org/html/rfc1918#section-3
-		diag.MustParseCIDR("10.0.0.0/8"),
-		diag.MustParseCIDR("172.16.0.0/12"),
-		diag.MustParseCIDR("192.168.0.0/16"),
-	}
-)
+	// reversed: https://tools.ietf.org/html/rfc1918#section-3
+	diag.MustParseCIDR("10.0.0.0/8"),
+	diag.MustParseCIDR("172.16.0.0/12"),
+	diag.MustParseCIDR("192.168.0.0/16"),
+}
 
 func reverse(ss []string) {
 	last := len(ss) - 1
@@ -857,7 +858,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// DNS has no reply for resolving errors
 }
 
-func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dns.RR, error) {
+func (s *Server) resolveSubname(hostname string, q dns.Question, w dns.ResponseWriter, r *dns.Msg) ([]dns.RR, []dns.RR, error) {
 	if q.Qclass != dns.ClassINET {
 		return nil, nil, nil
 	}
@@ -898,9 +899,17 @@ func (s *Server) resolveSubname(hostname string, q dns.Question) ([]dns.RR, []dn
 			}
 			return nil, nil, errEmpty
 		}
+		// Here we have failed to find a name in our lan. Because there's so many TLDs eg "cloud" it fucks with things.
+		// So if we have an alias with a subname eg hetzner.cloud where cloud is an alias we want to send it to an upstream
+		if _, alias := s.aliases[lcHostname(hostname)]; alias && name != hostname && strings.HasSuffix(q.Name, hostname+".") {
+			s.handleRequest(w, r)
+			return nil, nil, ErrHandled
+		}
 	}
 	return nil, nil, nil
 }
+
+var ErrHandled = errors.New("Handled")
 
 func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *dns.Msg) {
 	return func(w dns.ResponseWriter, r *dns.Msg) {
@@ -908,7 +917,7 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 			return
 		}
 
-		rr, re, err := s.resolveSubname(hostname, r.Question[0])
+		rr, re, err := s.resolveSubname(hostname, r.Question[0], w, r)
 		if err != nil {
 			if err == errEmpty {
 				m := new(dns.Msg)
@@ -918,6 +927,10 @@ func (s *Server) subnameHandler(hostname string) func(w dns.ResponseWriter, r *d
 				w.WriteMsg(m)
 				return
 			}
+			if errors.Is(err, ErrHandled) {
+				return
+			}
+
 			log.Fatalf("question %#v: %v", r.Question[0], err)
 		}
 		if len(rr) > 0 {
