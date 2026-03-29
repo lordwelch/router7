@@ -27,7 +27,7 @@ import (
 )
 
 func TestDNS(t *testing.T) {
-	srv := dns.NewServer("localhost:4453", "lan", dns.Upstreams{})
+	srv := dns.NewServer("localhost:4453", []string{"lan"}, dns.Upstreams{})
 	s := &miekgdns.Server{Addr: "localhost:4453", Net: "udp", Handler: srv.Mux}
 	go s.ListenAndServe()
 	const port = 4453
