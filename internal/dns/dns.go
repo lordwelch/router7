@@ -838,8 +838,9 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 	upstreams := s.upstreams()
-	// We have primary and secondar so we can ensure that nextdns doh is tried first
-	for idx, u := range append(upstreams.Primary, upstreams.Secondary...) {
+	// We have primary and secondary so we can ensure that nextdns doh is tried first
+	for idx, u := range append(upstreams.Primary[:0:0], upstreams.Secondary...) {
+		log.Printf("Trying upstream %v for %v", u, r)
 		var in *dns.Msg
 		in, _, err = s.client.Exchange(r, u, clientInfo)
 		if err != nil {
