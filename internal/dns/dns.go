@@ -574,7 +574,6 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 			log.Println("Unable to register", l.Hostname, "in dns", err)
 			continue
 		}
-		log.Println("Registering:", l)
 		if l.Addr.To4() != nil { // even though this is a dhcpv4 lease we reuse it for ipv6 addresses
 			s.hostsByName[lcHostname(lower)] = IP{
 				IPv4: l.Addr,
