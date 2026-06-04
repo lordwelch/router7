@@ -74,16 +74,35 @@ type Handler struct {
 	leasesIP map[int]*Lease
 }
 
-func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.PacketConn, options dhcp4.Options) (*Handler, error) {
-	serverIP, err := netconfig.LinkAddress(dir, ifaceName)
+func LastIP(ip net.IP, mask []byte) net.IP {
+	start:= ip.To4()
+	result := make(net.IP, 4)
+	for i := range mask {
+		result[i] = start[i] | (^mask[i])
+	}
+	return result
+}
+
+// RangeFromOptions Given the server IP and a set of options extracts the
+// netmask and returns the effective ip range
+func RangeFromOptions(ip net.IP, options dhcp4.Options) (net.IP, net.IP) {
+	mask := net.IPv4Mask(255, 255, 255, 0)
+	for code, option := range options {
+		if code == dhcp4.OptionSubnetMask {
+			mask = option[:4]
+		}
+	}
+
+	return dhcp4.IPAdd(ip, 1), dhcp4.IPAdd(LastIP(ip, mask), -1)
+}
+
+func NewHandler(dir string, iface *net.Interface, conn net.PacketConn, options dhcp4.Options) (*Handler, error) {
+	if iface == nil {
+		return nil, fmt.Errorf("iface is nil: you must provide an interface")
+	}
+	serverIP, err := netconfig.LinkAddress(dir, iface.Name)
 	if err != nil {
 		return nil, err
-	}
-	if iface == nil {
-		iface, err = net.InterfaceByName(ifaceName)
-		if err != nil {
-			return nil, err
-		}
 	}
 	if conn == nil {
 		conn, err = packet.Listen(iface, packet.Raw, syscall.ETH_P_ALL, nil)
@@ -106,9 +125,10 @@ func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.Pac
 		}
 	}
 	serverIP = serverIP.To4()
-	start := make(net.IP, len(serverIP))
-	copy(start, serverIP)
-	start[len(start)-1]++
+	start, end := RangeFromOptions(serverIP, options)
+	leaseRange := dhcp4.IPRange(start, end)
+	fmt.Printf("Serving %d addresses from %v to %v\n", leaseRange, start, end)
+
 	return &Handler{
 		rawConn:     conn,
 		iface:       iface,
@@ -116,7 +136,7 @@ func NewHandler(dir string, iface *net.Interface, ifaceName string, conn net.Pac
 		leasesIP:    make(map[int]*Lease),
 		serverIP:    serverIP,
 		start:       start,
-		leaseRange:  230,
+		leaseRange:  leaseRange,
 		LeasePeriod: leasePeriod,
 		options:     options,
 		timeNow:     time.Now,
@@ -400,6 +420,8 @@ func (h *Handler) serveDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, options d
 			log.Printf("Expired leases for %v upon DHCPDECLINE", hwAddr)
 		}
 		// Decline does not expect an ACK response.
+		return nil
+	case dhcp4.Release:
 		return nil
 	}
 	return nil

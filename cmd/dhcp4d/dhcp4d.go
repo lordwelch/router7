@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,8 +52,10 @@ import (
 	"github.com/rtr7/router7/internal/teelogger"
 )
 
-var iface = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
-var domain = flag.String("domain", "lan", "domain name for your network")
+var (
+	iface  = flag.String("interface", "lan0", "ethernet interface to listen for DHCPv4 requests on")
+	domain = flag.String("domain", "lan", "domain name for your network")
+)
 
 var log = teelogger.NewConsole()
 
@@ -73,7 +76,7 @@ func updateNonExpired(leases []*dhcp4d.Lease) {
 	nonExpiredLeases.Set(float64(nonExpired))
 }
 
-var ouiDB = oui.NewDB("/perm/dhcp4d/oui")
+var ouiDB = oui.NewDB("/perm/" + path.Base(os.Args[0]) + "/oui")
 
 var (
 	leasesMu sync.Mutex
@@ -274,7 +277,7 @@ func newSrv(permDir string) (*srv, error) {
 		}
 	}()
 
-	if err := os.MkdirAll(filepath.Join(permDir, "dhcp4d"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(permDir, "dhcp4d"), 0o755); err != nil {
 		return nil, err
 	}
 	errs := make(chan error)
@@ -302,11 +305,11 @@ func newSrv(permDir string) (*srv, error) {
 		dhcp4.OptionDomainSearch:               domainSearch,
 	}
 
-	handler, err := dhcp4d.NewHandler(permDir, ifc, *iface, nil, options)
+	handler, err := dhcp4d.NewHandler(permDir, ifc, nil, options)
 	if err != nil {
 		return nil, err
 	}
-	if err := loadLeases(handler, filepath.Join(permDir, "dhcp4d/leases.json")); err != nil {
+	if err := loadLeases(handler, filepath.Join(permDir, path.Base(os.Args[0]), "leases.json")); err != nil {
 		return nil, err
 	}
 
@@ -441,7 +444,7 @@ func newSrv(permDir string) (*srv, error) {
 		if err := json.Indent(&out, b, "", "\t"); err == nil {
 			b = out.Bytes()
 		}
-		if err := renameio.WriteFile(filepath.Join(permDir, "dhcp4d/leases.json"), b, 0644); err != nil {
+		if err := renameio.WriteFile(filepath.Join(permDir, path.Base(os.Args[0]), "leases.json"), b, 0o644); err != nil {
 			errs <- err
 		}
 		updateNonExpired(leases)
@@ -482,7 +485,7 @@ func newSrv(permDir string) (*srv, error) {
 		}
 		select {
 		case mayqtt <- PublishRequest{
-			Topic:    "router7/dhcp4d/lease/" + identifier,
+			Topic:    "router7/" + path.Base(os.Args[0]) + "/lease/" + identifier,
 			Retained: true,
 			Payload:  leaseJSON,
 		}:
