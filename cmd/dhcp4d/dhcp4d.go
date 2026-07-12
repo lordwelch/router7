@@ -241,12 +241,17 @@ func loadLeases(h *dhcp4d.Handler, fn string) error {
 var httpListeners = multilisten.NewPool()
 
 func updateListeners() error {
-	hosts, err := gokrazy.PrivateInterfaceAddrs()
+	ifc, err := net.InterfaceByName(*iface)
 	if err != nil {
 		return err
 	}
-	if net1, err := multilisten.IPv6Net1("/perm"); err == nil {
-		hosts = append(hosts, net1)
+	addrs, err := ifc.Addrs()
+	if err != nil {
+		return err
+	}
+	hosts := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		hosts = append(hosts, addr.String())
 	}
 
 	httpListeners.ListenAndServe(hosts, func(host string) multilisten.Listener {
@@ -277,7 +282,7 @@ func newSrv(permDir string) (*srv, error) {
 		}
 	}()
 
-	if err := os.MkdirAll(filepath.Join(permDir, "dhcp4d"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(permDir, path.Base(os.Args[0])), 0o755); err != nil {
 		return nil, err
 	}
 	errs := make(chan error)
