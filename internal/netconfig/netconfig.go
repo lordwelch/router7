@@ -810,7 +810,6 @@ func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
 		},
 		// [ payload load 6b @ link header + 6 => reg 1 ]
 		&expr.Payload{
-			OperationType: expr.PayloadLoad,
 			DestRegister:  1,
 			Base:          expr.PayloadBaseLLHeader,
 			Offset:        6,
@@ -829,6 +828,7 @@ func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
 			Kind: expr.VerdictDrop,
 		},
 	)
+	fmt.Printf("Debug mac drop: %#v\n", cmp)
 	return cmp
 }
 
@@ -918,8 +918,8 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 }
 
 type HardwareAddressBlock struct {
-	HardwareAddress            string
-	AllowTailscale bool
+	HardwareAddress string
+	AllowTailscale  bool
 }
 
 type HardwareAddressBlocks struct {
