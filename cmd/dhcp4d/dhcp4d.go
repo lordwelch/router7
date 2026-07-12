@@ -251,7 +251,11 @@ func updateListeners() error {
 	}
 	hosts := make([]string, 0, len(addrs))
 	for _, addr := range addrs {
-		hosts = append(hosts, addr.String())
+		if a, ok := addr.(*net.IPNet); ok {
+			hosts = append(hosts, a.IP.String())
+		} else {
+			hosts = append(hosts, addr.String())
+		}
 	}
 
 	httpListeners.ListenAndServe(hosts, func(host string) multilisten.Listener {
