@@ -469,7 +469,7 @@ func createResolvConfIfMissing(root, contents string) error {
 	// This is os.WriteFile, but with O_EXCL set
 	// so that we do not accidentally clobber the file
 	// in case another process (e.g. tailscaled) just wrote it.
-	f, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0644)
+	f, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
@@ -779,6 +779,59 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 	return ex
 }
 
+func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
+	var cmp []expr.Any
+	if allowTailscale {
+		cmp = append(cmp,
+			// [ meta load oifname => reg 1 ]
+			&expr.Meta{
+				Key:      expr.MetaKeyOIFNAME,
+				Register: 1,
+			},
+			// [ cmp neq reg 1 0x6c696174 0x6c616373 0x00003065 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     nfifname("tailscale0*"),
+			},
+		)
+	}
+	cmp = append(cmp,
+		// [ meta load iiftype => reg 1 ]
+		&expr.Meta{
+			Key:      expr.MetaKeyIIFTYPE,
+			Register: 1,
+		},
+		// [ cmp eq reg 1 0x00000001 ]
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(unix.ARPHRD_ETHER),
+		},
+		// [ payload load 6b @ link header + 6 => reg 1 ]
+		&expr.Payload{
+			OperationType: expr.PayloadLoad,
+			DestRegister:  1,
+			Base:          expr.PayloadBaseLLHeader,
+			Offset:        6,
+			Len:           6,
+		},
+		// [ cmp eq reg 1 0x5af07f68 0x0000dd92 ]
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     mac,
+		},
+		// [ counter pkts 0 bytes 0 ] // TODO
+		&expr.Counter{},
+		// [ immediate reg 0 drop ]
+		&expr.Verdict{
+			Kind: expr.VerdictDrop,
+		},
+	)
+	return cmp
+}
+
 type portForwarding struct {
 	Proto    string `json:"proto"`     // e.g. “tcp” (or “tcp,udp”)
 	Port     string `json:"port"`      // e.g. “8080” (or “8080-8090”)
@@ -864,6 +917,51 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 	return nil
 }
 
+type HardwareAddressBlock struct {
+	HardwareAddress            string
+	AllowTailscale bool
+}
+
+type HardwareAddressBlocks struct {
+	Blocks []HardwareAddressBlock
+}
+
+func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nftables.Chain) error {
+	b, err := os.ReadFile(filepath.Join(dir, "hardwareaddress_block.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var cfg HardwareAddressBlocks
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+
+	lan0ip, err := LinkAddress(dir, "lan0")
+	if err != nil {
+		return err
+	}
+	lan0ip = lan0ip.To4()
+	if got, want := len(lan0ip), net.IPv4len; got != want {
+		return fmt.Errorf("lan0 does not have an IPv4 address configured: len %d != %d", got, want)
+	}
+
+	for _, fw := range cfg.Blocks {
+		mac, err := net.ParseMAC(fw.HardwareAddress)
+		if err != nil {
+			continue
+		}
+		c.AddRule(&nftables.Rule{
+			Table: nat,
+			Chain: chain,
+			Exprs: dropDeviceInternet(mac, fw.AllowTailscale),
+		})
+	}
+	return nil
+}
+
 // DefaultCounterObj is overridden while testing
 var DefaultCounterObj = &nftables.CounterObj{}
 
@@ -928,9 +1026,12 @@ func hairpinDNAT() []expr.Any {
 	}
 }
 
-const pfChain = "router7-portforwardings"
-const natTable = "router7-nat"
-const filterTable = "router7-filter"
+const (
+	pfChain     = "router7-portforwardings"
+	mbChain     = "router7-ha-block"
+	natTable    = "router7-nat"
+	filterTable = "router7-filter"
+)
 
 // Only update port forwarding if there are existing rules.
 // This is required to not stomp over podman port forwarding, for example.
@@ -942,15 +1043,25 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 		return err
 	}
 
-	chain, err := c.ListChain(nat, pfChain)
+	portChain, err := c.ListChain(nat, pfChain)
 	if err != nil {
 		return err
 	}
 
 	log.Printf("rules already configured, only updating port forwardings")
 
-	c.FlushChain(chain)
-	if err := applyPortForwardings(dir, ifname, c, nat, chain); err != nil {
+	c.FlushChain(portChain)
+	if err := applyPortForwardings(dir, ifname, c, nat, portChain); err != nil {
+		return err
+	}
+
+	blockChain, err := c.ListChain(nat, mbChain)
+	if err != nil {
+		return err
+	}
+
+	c.FlushChain(blockChain)
+	if err := applyHABlock(dir, c, nat, blockChain); err != nil {
 		return err
 	}
 
@@ -979,6 +1090,12 @@ func applyFirewall(dir, ifname string) error {
 		Type:  nftables.ChainTypeNAT,
 	})
 
+	mb := c.AddChain(&nftables.Chain{
+		Name:  mbChain,
+		Table: nat,
+		Type:  nftables.ChainTypeNAT,
+	})
+
 	prerouting := c.AddChain(&nftables.Chain{
 		Name:     "prerouting",
 		Hooknum:  nftables.ChainHookPrerouting,
@@ -991,6 +1108,10 @@ func applyFirewall(dir, ifname string) error {
 		Table: nat,
 		Chain: prerouting,
 		Exprs: []expr.Any{
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: mbChain,
+			},
 			&expr.Verdict{
 				Kind:  expr.VerdictJump,
 				Chain: pfChain,
@@ -1030,6 +1151,10 @@ func applyFirewall(dir, ifname string) error {
 	})
 
 	if err := applyPortForwardings(dir, ifname, c, nat, pf); err != nil {
+		return err
+	}
+
+	if err := applyHABlock(dir, c, nat, mb); err != nil {
 		return err
 	}
 
@@ -1222,7 +1347,7 @@ func applySysctl(ifname string) error {
 		before, after, _ := strings.Cut(ctl, "=")
 		key, val := before, after
 		fn := strings.Replace(key, ".", "/", -1)
-		if err := os.WriteFile("/proc/sys/"+fn, []byte(val), 0644); err != nil {
+		if err := os.WriteFile("/proc/sys/"+fn, []byte(val), 0o644); err != nil {
 			return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)
 		}
 	}
