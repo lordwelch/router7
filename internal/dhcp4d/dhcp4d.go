@@ -147,7 +147,7 @@ func NewHandler(dir string, iface *net.Interface, conn net.PacketConn, options d
 // https://support.apple.com/de-ch/HT202068,
 // so if 20 minutes ever causes any trouble,
 // we should try increasing it to 1 hour.
-const leasePeriod = 20 * time.Minute
+const leasePeriod = 60 * time.Minute
 
 // SetLeases overwrites the leases database with the specified leases, typically
 // loaded from persistent storage. There is no locking, so SetLeases must be
