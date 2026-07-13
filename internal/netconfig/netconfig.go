@@ -779,24 +779,20 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 	return ex
 }
 
-func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
+func dropDeviceInternet(mac net.HardwareAddr) []expr.Any {
 	var cmp []expr.Any
-	if allowTailscale {
-		cmp = append(cmp,
-			// [ meta load oifname => reg 1 ]
-			&expr.Meta{
-				Key:      expr.MetaKeyOIFNAME,
-				Register: 1,
-			},
-			// [ cmp neq reg 1 0x6c696174 0x6c616373 0x00003065 ]
-			&expr.Cmp{
-				Op:       expr.CmpOpNeq,
-				Register: 1,
-				Data:     nfifname("tailscale0*"),
-			},
-		)
-	}
 	cmp = append(cmp,
+		// [ meta load oifname => reg 1 ]
+		&expr.Meta{
+			Key:      expr.MetaKeyOIFNAME,
+			Register: 1,
+		},
+		// [ cmp neq reg 1 0x6c696174 0x6c616373 0x00003065 ]
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte("uplink"),
+		},
 		// [ meta load iiftype => reg 1 ]
 		&expr.Meta{
 			Key:      expr.MetaKeyIIFTYPE,
@@ -806,14 +802,14 @@ func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
-			Data:     binaryutil.BigEndian.PutUint16(unix.ARPHRD_ETHER),
+			Data:     []byte{unix.ARPHRD_ETHER,0},
 		},
 		// [ payload load 6b @ link header + 6 => reg 1 ]
 		&expr.Payload{
-			DestRegister:  1,
-			Base:          expr.PayloadBaseLLHeader,
-			Offset:        6,
-			Len:           6,
+			DestRegister: 1,
+			Base:         expr.PayloadBaseLLHeader,
+			Offset:       6,
+			Len:          6,
 		},
 		// [ cmp eq reg 1 0x5af07f68 0x0000dd92 ]
 		&expr.Cmp{
@@ -828,7 +824,6 @@ func dropDeviceInternet(mac net.HardwareAddr, allowTailscale bool) []expr.Any {
 			Kind: expr.VerdictDrop,
 		},
 	)
-	fmt.Printf("Debug mac drop: %#v\n", cmp)
 	return cmp
 }
 
@@ -919,7 +914,6 @@ func applyPortForwardings(dir, ifname string, c *nftables.Conn, nat *nftables.Ta
 
 type HardwareAddressBlock struct {
 	HardwareAddress string
-	AllowTailscale  bool
 }
 
 type HardwareAddressBlocks struct {
@@ -956,7 +950,7 @@ func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nfta
 		c.AddRule(&nftables.Rule{
 			Table: nat,
 			Chain: chain,
-			Exprs: dropDeviceInternet(mac, fw.AllowTailscale),
+			Exprs: dropDeviceInternet(mac),
 		})
 	}
 	return nil
@@ -1043,6 +1037,11 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 		return err
 	}
 
+	filter, err := c.ListTable(filterTable)
+	if err != nil {
+		return err
+	}
+
 	portChain, err := c.ListChain(nat, pfChain)
 	if err != nil {
 		return err
@@ -1055,7 +1054,7 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 		return err
 	}
 
-	blockChain, err := c.ListChain(nat, mbChain)
+	blockChain, err := c.ListChain(filter, mbChain)
 	if err != nil {
 		return err
 	}
@@ -1090,12 +1089,6 @@ func applyFirewall(dir, ifname string) error {
 		Type:  nftables.ChainTypeNAT,
 	})
 
-	mb := c.AddChain(&nftables.Chain{
-		Name:  mbChain,
-		Table: nat,
-		Type:  nftables.ChainTypeNAT,
-	})
-
 	prerouting := c.AddChain(&nftables.Chain{
 		Name:     "prerouting",
 		Hooknum:  nftables.ChainHookPrerouting,
@@ -1108,10 +1101,6 @@ func applyFirewall(dir, ifname string) error {
 		Table: nat,
 		Chain: prerouting,
 		Exprs: []expr.Any{
-			&expr.Verdict{
-				Kind:  expr.VerdictJump,
-				Chain: mbChain,
-			},
 			&expr.Verdict{
 				Kind:  expr.VerdictJump,
 				Chain: pfChain,
@@ -1151,169 +1140,179 @@ func applyFirewall(dir, ifname string) error {
 	})
 
 	if err := applyPortForwardings(dir, ifname, c, nat, pf); err != nil {
-		return err
+		log.Println("Unable to apply port forwardings")
 	}
 
-	if err := applyHABlock(dir, c, nat, mb); err != nil {
-		return err
-	}
-
-	filter4 := c.AddTable(&nftables.Table{
-		Family: nftables.TableFamilyIPv4,
+	filter := c.AddTable(&nftables.Table{
+		Family: nftables.TableFamilyINet,
 		Name:   filterTable,
 	})
 
-	filter6 := c.AddTable(&nftables.Table{
-		Family: nftables.TableFamilyIPv6,
-		Name:   filterTable,
+	mb := c.AddChain(&nftables.Chain{
+		Name:  mbChain,
+		Table: filter,
+		Type:  nftables.ChainTypeFilter,
 	})
 
-	for _, filter := range []*nftables.Table{filter4, filter6} {
-		forward := c.AddChain(&nftables.Chain{
-			Name:     "forward",
-			Hooknum:  nftables.ChainHookForward,
-			Priority: nftables.ChainPriorityFilter,
-			Table:    filter,
-			Type:     nftables.ChainTypeFilter,
-		})
-
-		c.AddRule(&nftables.Rule{
-			Table: filter,
-			Chain: forward,
-			Exprs: []expr.Any{
-				// [ meta load oifname => reg 1 ]
-				&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
-				// [ cmp eq reg 1 0x30707070 0x00000000 0x00000000 0x00000000 ]
-				&expr.Cmp{
-					Op:       expr.CmpOpEq,
-					Register: 1,
-					Data:     nfifname(ifname),
-				},
-
-				// [ meta load l4proto => reg 1 ]
-				&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-				// [ cmp eq reg 1 0x00000006 ]
-				&expr.Cmp{
-					Op:       expr.CmpOpEq,
-					Register: 1,
-					Data:     []byte{unix.IPPROTO_TCP},
-				},
-
-				// [ payload load 1b @ transport header + 13 => reg 1 ]
-				&expr.Payload{
-					DestRegister: 1,
-					Base:         expr.PayloadBaseTransportHeader,
-					Offset:       13, // TODO
-					Len:          1,  // TODO
-				},
-				// [ bitwise reg 1 = (reg=1 & 0x00000002 ) ^ 0x00000000 ]
-				&expr.Bitwise{
-					DestRegister:   1,
-					SourceRegister: 1,
-					Len:            1,
-					Mask:           []byte{0x02},
-					Xor:            []byte{0x00},
-				},
-				// [ cmp neq reg 1 0x00000000 ]
-				&expr.Cmp{
-					Op:       expr.CmpOpNeq,
-					Register: 1,
-					Data:     []byte{0x00},
-				},
-
-				// [ rt load tcpmss => reg 1 ]
-				&expr.Rt{
-					Register: 1,
-					Key:      expr.RtTCPMSS,
-				},
-				// [ byteorder reg 1 = hton(reg 1, 2, 2) ]
-				&expr.Byteorder{
-					DestRegister:   1,
-					SourceRegister: 1,
-					Op:             expr.ByteorderHton,
-					Len:            2,
-					Size:           2,
-				},
-				// [ exthdr write tcpopt reg 1 => 2b @ 2 + 2 ]
-				&expr.Exthdr{
-					SourceRegister: 1,
-					Type:           2, // TODO
-					Offset:         2,
-					Len:            2,
-					Op:             expr.ExthdrOpTcpopt,
-				},
-			},
-		})
-
-		counterObj := getCounterObj(c, &nftables.CounterObj{
-			Table: filter,
-			Name:  "fwded",
-		})
-		counter := c.AddObj(counterObj).(*nftables.CounterObj)
-
-		const NFT_OBJECT_COUNTER = 1 // TODO: get into x/sys/unix
-		c.AddRule(&nftables.Rule{
-			Table: filter,
-			Chain: forward,
-			Exprs: []expr.Any{
-				// [ counter name fwded ]
-				&expr.Objref{
-					Type: NFT_OBJECT_COUNTER,
-					Name: counter.Name,
-				},
-			},
-		})
-
-		input := c.AddChain(&nftables.Chain{
-			Name:     "input",
-			Hooknum:  nftables.ChainHookInput,
-			Priority: nftables.ChainPriorityFilter,
-			Table:    filter,
-			Type:     nftables.ChainTypeFilter,
-		})
-
-		counterObj = getCounterObj(c, &nftables.CounterObj{
-			Table: filter,
-			Name:  "inputc",
-		})
-		counter = c.AddObj(counterObj).(*nftables.CounterObj)
-		c.AddRule(&nftables.Rule{
-			Table: filter,
-			Chain: input,
-			Exprs: []expr.Any{
-				// [ counter name input ]
-				&expr.Objref{
-					Type: NFT_OBJECT_COUNTER,
-					Name: counter.Name,
-				},
-			},
-		})
-
-		output := c.AddChain(&nftables.Chain{
-			Name:     "output",
-			Hooknum:  nftables.ChainHookOutput,
-			Priority: nftables.ChainPriorityFilter,
-			Table:    filter,
-			Type:     nftables.ChainTypeFilter,
-		})
-
-		counterObj = getCounterObj(c, &nftables.CounterObj{
-			Table: filter,
-			Name:  "outputc",
-		})
-		counter = c.AddObj(counterObj).(*nftables.CounterObj)
-		c.AddRule(&nftables.Rule{
-			Table: filter,
-			Chain: output,
-			Exprs: []expr.Any{
-				// [ counter name output ]
-				&expr.Objref{
-					Type: NFT_OBJECT_COUNTER,
-					Name: counter.Name,
-				},
-			},
-		})
+	if err := applyHABlock(dir, c, filter, mb); err != nil {
+		return err
 	}
+
+	forward := c.AddChain(&nftables.Chain{
+		Name:     "forward",
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityFilter,
+		Table:    filter,
+		Type:     nftables.ChainTypeFilter,
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: forward,
+		Exprs: []expr.Any{
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: mbChain,
+			},
+		},
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: forward,
+		Exprs: []expr.Any{
+			// [ meta load oifname => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			// [ cmp eq reg 1 0x30707070 0x00000000 0x00000000 0x00000000 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     nfifname(ifname),
+			},
+
+			// [ meta load l4proto => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			// [ cmp eq reg 1 0x00000006 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_TCP},
+			},
+
+			// [ payload load 1b @ transport header + 13 => reg 1 ]
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       13, // TODO
+				Len:          1,  // TODO
+			},
+			// [ bitwise reg 1 = (reg=1 & 0x00000002 ) ^ 0x00000000 ]
+			&expr.Bitwise{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Len:            1,
+				Mask:           []byte{0x02},
+				Xor:            []byte{0x00},
+			},
+			// [ cmp neq reg 1 0x00000000 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     []byte{0x00},
+			},
+
+			// [ rt load tcpmss => reg 1 ]
+			&expr.Rt{
+				Register: 1,
+				Key:      expr.RtTCPMSS,
+			},
+			// [ byteorder reg 1 = hton(reg 1, 2, 2) ]
+			&expr.Byteorder{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Op:             expr.ByteorderHton,
+				Len:            2,
+				Size:           2,
+			},
+			// [ exthdr write tcpopt reg 1 => 2b @ 2 + 2 ]
+			&expr.Exthdr{
+				SourceRegister: 1,
+				Type:           2, // TODO
+				Offset:         2,
+				Len:            2,
+				Op:             expr.ExthdrOpTcpopt,
+			},
+		},
+	})
+
+	counterObj := getCounterObj(c, &nftables.CounterObj{
+		Table: filter,
+		Name:  "fwded",
+	})
+	counter := c.AddObj(counterObj).(*nftables.CounterObj)
+
+	const NFT_OBJECT_COUNTER = 1 // TODO: get into x/sys/unix
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: forward,
+		Exprs: []expr.Any{
+			// [ counter name fwded ]
+			&expr.Objref{
+				Type: NFT_OBJECT_COUNTER,
+				Name: counter.Name,
+			},
+		},
+	})
+
+	input := c.AddChain(&nftables.Chain{
+		Name:     "input",
+		Hooknum:  nftables.ChainHookInput,
+		Priority: nftables.ChainPriorityFilter,
+		Table:    filter,
+		Type:     nftables.ChainTypeFilter,
+	})
+
+	counterObj = getCounterObj(c, &nftables.CounterObj{
+		Table: filter,
+		Name:  "inputc",
+	})
+	counter = c.AddObj(counterObj).(*nftables.CounterObj)
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: input,
+		Exprs: []expr.Any{
+			// [ counter name input ]
+			&expr.Objref{
+				Type: NFT_OBJECT_COUNTER,
+				Name: counter.Name,
+			},
+		},
+	})
+
+	output := c.AddChain(&nftables.Chain{
+		Name:     "output",
+		Hooknum:  nftables.ChainHookOutput,
+		Priority: nftables.ChainPriorityFilter,
+		Table:    filter,
+		Type:     nftables.ChainTypeFilter,
+	})
+
+	counterObj = getCounterObj(c, &nftables.CounterObj{
+		Table: filter,
+		Name:  "outputc",
+	})
+	counter = c.AddObj(counterObj).(*nftables.CounterObj)
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: output,
+		Exprs: []expr.Any{
+			// [ counter name output ]
+			&expr.Objref{
+				Type: NFT_OBJECT_COUNTER,
+				Name: counter.Name,
+			},
+		},
+	})
 
 	return c.Flush()
 }
