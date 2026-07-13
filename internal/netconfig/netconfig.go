@@ -802,7 +802,7 @@ func dropDeviceInternet(mac net.HardwareAddr) []expr.Any {
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
-			Data:     []byte{unix.ARPHRD_ETHER,0},
+			Data:     binaryutil.NativeEndian.PutUint16(unix.ARPHRD_ETHER),
 		},
 		// [ payload load 6b @ link header + 6 => reg 1 ]
 		&expr.Payload{
