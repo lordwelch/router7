@@ -1034,37 +1034,45 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 
 	nat, err := c.ListTable(natTable)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to find table %s: %w", natTable, err)
 	}
 
-	filter, err := c.ListTable(filterTable)
+	filter, err := c.ListTableOfFamily(filterTable, nftables.TableFamilyINet)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to find table %s: %w", filterTable, err)
 	}
 
 	portChain, err := c.ListChain(nat, pfChain)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to find chain %s: %w", pfChain, err)
 	}
 
 	log.Printf("rules already configured, only updating port forwardings")
 
 	c.FlushChain(portChain)
 	if err := applyPortForwardings(dir, ifname, c, nat, portChain); err != nil {
-		return err
+		return fmt.Errorf("fail to setup port forwards: %w", err)
+	}
+	err = c.Flush()
+	if err != nil {
+		return fmt.Errorf("fail to apply port forwards: %w", err)
 	}
 
 	blockChain, err := c.ListChain(filter, mbChain)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to find chain %s: %w", mbChain, err)
 	}
 
 	c.FlushChain(blockChain)
-	if err := applyHABlock(dir, c, nat, blockChain); err != nil {
-		return err
+	if err := applyHABlock(dir, c, filter, blockChain); err != nil {
+		return fmt.Errorf("fail to setup blocks: %w", err)
+	}
+	err = c.Flush()
+	if err != nil {
+		return fmt.Errorf("fail to apply blocks: %w", err)
 	}
 
-	return c.Flush()
+	return nil
 }
 
 func applyFirewall(dir, ifname string) error {
