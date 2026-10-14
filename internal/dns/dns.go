@@ -536,7 +536,7 @@ func (s *Server) IPv6Handler(w http.ResponseWriter, r *http.Request) {
 			ipv6 = netip.Addr{}
 			continue
 		}
-		if ipv6.IsGlobalUnicast() && !(ipv6.IsPrivate() || ipv6.IsLinkLocalUnicast() || ipv6.IsMulticast()) {
+		if ipv6.IsGlobalUnicast() && !ipv6.IsPrivate() {
 			break
 		}
 		ipv6 = netip.Addr{}
