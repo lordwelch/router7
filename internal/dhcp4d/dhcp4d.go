@@ -75,7 +75,7 @@ type Handler struct {
 }
 
 func LastIP(ip net.IP, mask []byte) net.IP {
-	start:= ip.To4()
+	start := ip.To4()
 	result := make(net.IP, 4)
 	for i := range mask {
 		result[i] = start[i] | (^mask[i])

@@ -16,7 +16,9 @@
 package dns
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -27,12 +29,16 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rtr7/router7/internal/dhcp4d"
 	"github.com/rtr7/router7/internal/diag"
+	"github.com/rtr7/router7/internal/netconfig"
+	"github.com/rtr7/router7/internal/notify"
 	"github.com/rtr7/router7/internal/teelogger"
 
 	"github.com/miekg/dns"
@@ -51,7 +57,7 @@ type lcHostname string
 
 type IP struct {
 	IPv4 net.IP
-	IPv6 net.IP
+	IPv6 []net.IP
 }
 
 type DNS struct {
@@ -165,7 +171,17 @@ type Server struct {
 	upstream   Upstreams
 }
 
-func (ip *IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
+func Compact(ip IP) IP {
+	slices.SortFunc(ip.IPv6, func(ip1, ip2 net.IP) int {
+		return strings.Compare(ip1.String(), ip2.String())
+	})
+	ip.IPv6 = slices.CompactFunc(ip.IPv6, func(ip1, ip2 net.IP) bool {
+		return strings.Compare(ip1.String(), ip2.String()) == 0
+	})
+	return ip
+}
+
+func (ip IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
 	var (
 		rr  []dns.RR
 		re  []dns.RR
@@ -184,14 +200,16 @@ func (ip *IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
 		}
 	}
 	if ip.IPv6 != nil {
-		r, err = dns.NewRR(name + " 3600 IN AAAA " + ip.IPv6.String())
-		if err != nil {
-			panic(err)
-		}
-		if qtype == dns.TypeAAAA {
-			rr = append(rr, r)
-		} else {
-			re = append(re, r)
+		for _, IPv6 := range ip.IPv6 {
+			r, err = dns.NewRR(name + " 3600 IN AAAA " + IPv6.String())
+			if err != nil {
+				panic(err)
+			}
+			if qtype == dns.TypeAAAA {
+				rr = append(rr, r)
+			} else {
+				re = append(re, r)
+			}
 		}
 	}
 	return rr, re
@@ -220,7 +238,9 @@ func FindInterface(ip net.IP) (net.Interface, error) {
 	return net.Interface{}, errors.New("No ipv6 addr found")
 }
 
-func GetIPv6Address(ip string) net.IP {
+var ipv6LinkLocal = diag.MustParseCIDR("fe80::/10")
+
+func GetLinkLocalIPv6Address(ip string) net.IP {
 	iface, err := FindInterface(net.ParseIP(ip))
 	if err != nil {
 		return nil
@@ -229,10 +249,7 @@ func GetIPv6Address(ip string) net.IP {
 	if err != nil {
 		return nil
 	}
-	var (
-		linkLocal     netip.Addr
-		ipv6LinkLocal = diag.MustParseCIDR("fe80::/10")
-	)
+	var linkLocal netip.Addr
 	for _, addr := range addrs {
 		ipnet, ok := addr.(*net.IPNet)
 		if !ok {
@@ -295,7 +312,7 @@ func NewServer(addr string, domains []string, upstream Upstreams) *Server {
 		hostname:  hostname,
 		ip: IP{
 			IPv4: net.ParseIP(ip),
-			IPv6: GetIPv6Address(ip), // TODO: IPv6 doesn't work for some reason
+			IPv6: []net.IP{GetLinkLocalIPv6Address(ip)}, // TODO: IPv6 doesn't work for some reason
 		},
 		subnames: make(map[lcHostname]map[string]IP),
 		aliases:  make(map[lcHostname]lcHostname),
@@ -340,14 +357,14 @@ func NewServer(addr string, domains []string, upstream Upstreams) *Server {
 func (s *Server) initHostsLocked() {
 	s.hostsByName = make(map[lcHostname]IP)
 	s.hostsByIP = make(map[string]string)
-	if s.hostname != "" && (s.ip.IPv4 != nil || s.ip.IPv6 != nil) {
+	if s.hostname != "" && (s.ip.IPv4 != nil || len(s.ip.IPv6) > 0) {
 		lower := strings.ToLower(s.hostname)
 		s.hostsByName[lcHostname(lower)] = s.ip
 
 		if rev, err := dns.ReverseAddr(s.ip.IPv4.String()); err == nil {
 			s.hostsByIP[rev] = s.hostname
 		}
-		if rev, err := dns.ReverseAddr(s.ip.IPv6.String()); err == nil {
+		if rev, err := dns.ReverseAddr(s.ip.IPv6[0].String()); err == nil {
 			s.hostsByIP[rev] = s.hostname
 		}
 		s.Mux.HandleFunc(lower+".", s.subnameHandler(s.hostname))
@@ -482,6 +499,72 @@ func (s *Server) topLevelHandler(host string, w http.ResponseWriter, r *http.Req
 	w.Write([]byte("ok\n"))
 }
 
+func (s *Server) IPv6Handler(w http.ResponseWriter, r *http.Request) {
+	// ipv6 sucks there isn't a clear way to get the IP
+	// this only listens on private addresses, but we need public IPs
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if port < 0 || err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid port recieved %v: %v\n", r.URL.Query().Get("port"), err)
+		return
+	}
+	addr, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "invalid ip", http.StatusBadRequest)
+		return
+	}
+	remoteIP, _ := dns.ReverseAddr(addr.Addr().String())
+	host, ok := s.hostByIP(remoteIP)
+	if !ok {
+		http.Error(w, "Your IP is not in dns yet. Try again later", http.StatusBadRequest)
+	}
+	dnsIP, ok := s.hostsByName[lcHostname(strings.ToLower(host))]
+	if !ok {
+		http.Error(w, "Somehow your hostname is not in dns yet. Try again later", http.StatusBadRequest)
+	}
+	// Hardcode /perm because otherwise it's more work
+	b, _ := os.ReadFile("/perm/ipv6.portforwardings.json")
+	// We don't actually care about the error because we will be adding to it
+	var cfg netconfig.IPv6PortForwardings
+	json.Unmarshal(b, &cfg)
+	// we also don't care about this error as we will be writing it in a second
+
+	var ipv6 netip.Addr
+	for _, ip := range dnsIP.IPv6 {
+		ipv6, ok = netip.AddrFromSlice(ip)
+		if !ok {
+			ipv6 = netip.Addr{}
+			continue
+		}
+		if ipv6.IsGlobalUnicast() && !(ipv6.IsPrivate() || ipv6.IsLinkLocalUnicast() || ipv6.IsMulticast()) {
+			break
+		}
+		ipv6 = netip.Addr{}
+	}
+	if ipv6 == (netip.Addr{}) {
+		http.Error(w, "Unable to find ipv6 address for host. Try again later", 512)
+		return
+	}
+
+	cfg.IPv6PortForwardings = append(cfg.IPv6PortForwardings, netip.AddrPortFrom(ipv6, uint16(port)))
+
+	buf := &bytes.Buffer{}
+	j := json.NewEncoder(buf)
+	j.SetIndent("", "  ")
+	err = j.Encode(cfg)
+	if err != nil {
+		http.Error(w, "Process request. Try again later though it probably won't help", http.StatusInternalServerError)
+		return
+	}
+	err = os.WriteFile("/perm/ipv6.portforwardings.json", buf.Bytes(), 0o600)
+	if err != nil {
+		http.Error(w, "Process request. Try again later though it probably won't help", http.StatusInternalServerError)
+		return
+	}
+	// Notify netconfigd of ipv6 address needing a port forward
+	notify.Process("/user/netconfigd", syscall.SIGUSR1)
+}
+
 func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 	host := r.FormValue("host")
 	ips := r.FormValue("ip")
@@ -526,10 +609,10 @@ func (s *Server) DyndnsHandler(w http.ResponseWriter, r *http.Request) {
 			IPv6: subnames[host].IPv6,
 		}
 	} else {
-		subnames[host] = IP{
+		subnames[host] = Compact(IP{
 			IPv4: subnames[host].IPv4,
-			IPv6: ip,
-		}
+			IPv6: append(subnames[host].IPv6, ip),
+		})
 	}
 
 	w.Write([]byte("ok\n"))
@@ -580,10 +663,10 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 				IPv6: s.hostsByName[lcHostname(lower)].IPv6,
 			}
 		} else {
-			s.hostsByName[lcHostname(lower)] = IP{
+			s.hostsByName[lcHostname(lower)] = Compact(IP{
 				IPv4: s.hostsByName[lcHostname(lower)].IPv4,
-				IPv6: l.Addr,
-			}
+				IPv6: append(s.hostsByName[lcHostname(lower)].IPv6, l.Addr),
+			})
 		}
 
 		if rev, err := dns.ReverseAddr(l.Addr.String()); err == nil {

@@ -83,7 +83,7 @@ func (a *listenerAdapter) Close() error { return a.Shutdown() }
 
 func logic() error {
 	// TODO: set correct upstream DNS resolver(s)
-	ip, err := netconfig.LinkAddress("/perm", "lan0")
+	lanIP, err := netconfig.LinkAddress("/perm", "lan0")
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func logic() error {
 	if buf, err := os.ReadFile("/perm/upstreams.json"); err == nil {
 		json.Unmarshal(buf, &upstreams)
 	}
-	srv := dns.NewServer(ip.String()+":53", flag.Args(), upstreams)
+	srv := dns.NewServer(lanIP.String()+":53", flag.Args(), upstreams)
 	readLeases := func() error {
 		b, err := os.ReadFile("/perm/dhcp4d/leases.json")
 		if err != nil {
@@ -127,6 +127,7 @@ func logic() error {
 	}
 	http.Handle("/metrics", srv.PrometheusHandler())
 	http.HandleFunc("/dyndns", srv.DyndnsHandler)
+	http.HandleFunc("/ipv6port-allow", srv.IPv6Handler)
 	if err := updateListeners(srv.Mux); err != nil {
 		return err
 	}

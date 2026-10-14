@@ -19,12 +19,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -40,6 +42,10 @@ import (
 )
 
 var log = teelogger.NewConsole()
+
+type IPv6PortForwardings struct {
+	IPv6PortForwardings []netip.AddrPort
+}
 
 func subnetMaskSize(mask string) (int, error) {
 	parts := strings.Split(mask, ".")
@@ -96,7 +102,7 @@ func applyDhcp4(dir string, cfg InterfaceConfig) error {
 	if err != nil {
 		return fmt.Errorf("netlink.NewHandle: %v", err)
 	}
-	defer h.Delete()
+	defer h.Close()
 	log.Printf("replacing address %v on %v", addr, linkName)
 	if err := h.AddrReplace(link, addr); err != nil {
 		return fmt.Errorf("AddrReplace(%v, %v): %v", linkName, addr, err)
@@ -630,14 +636,14 @@ func matchUplinkIP(lan0ip net.IP) []expr.Any {
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
-			Offset:       16, // TODO
-			Len:          4,  // TODO
+			Offset:       16,                        // TODO
+			Len:          nftables.TypeIPAddr.Bytes, // TODO
 		},
 		// [ bitwise reg 1 = (reg=1 & 0x000000ff ) ^ 0x00000000 ]
 		&expr.Bitwise{
 			DestRegister:   1,
 			SourceRegister: 1,
-			Len:            4,
+			Len:            nftables.TypeIPAddr.Bytes,
 			Mask:           []byte{0xff, 0x00, 0x00, 0x00}, // 255.0.0.0, i.e. /8
 			Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 		},
@@ -652,14 +658,14 @@ func matchUplinkIP(lan0ip net.IP) []expr.Any {
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
-			Offset:       16, // TODO
-			Len:          4,  // TODO
+			Offset:       16,                        // TODO
+			Len:          nftables.TypeIPAddr.Bytes, // TODO
 		},
 		//  [ bitwise reg 1 = (reg=1 & 0x00ffffff ) ^ 0x00000000 ]
 		&expr.Bitwise{
 			DestRegister:   1,
 			SourceRegister: 1,
-			Len:            4,
+			Len:            nftables.TypeIPAddr.Bytes,
 			Mask:           []byte{0xff, 0xff, 0xff, 0x00}, // 255.255.255.0, i.e. /24
 			Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 		},
@@ -728,11 +734,12 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseTransportHeader,
-			Offset:       2, // TODO
-			Len:          2, // TODO
+			Offset:       2,                              // TODO
+			Len:          nftables.TypeInetService.Bytes, // TODO
 		})
 	ex = append(ex, cmp...)
-	ex = append(ex,
+	ex = append(
+		ex,
 		// [ immediate reg 1 0x0217a8c0 ]
 		&expr.Immediate{
 			Register: 1,
@@ -740,7 +747,8 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 		},
 	)
 	if dportMin == dportMax {
-		ex = append(ex,
+		ex = append(
+			ex,
 			// [ immediate reg 2 0x0000f00f ]
 			&expr.Immediate{
 				Register: 2,
@@ -755,7 +763,8 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 			},
 		)
 	} else {
-		ex = append(ex,
+		ex = append(
+			ex,
 			// [ immediate reg 2 0x0000e60f ]
 			&expr.Immediate{
 				Register: 2,
@@ -781,7 +790,8 @@ func portForwardExpr(lan0ip net.IP, proto uint8, portMin, portMax uint16, dest n
 
 func dropDeviceInternet(mac net.HardwareAddr) []expr.Any {
 	var cmp []expr.Any
-	cmp = append(cmp,
+	cmp = append(
+		cmp,
 		// [ meta load oifname => reg 1 ]
 		&expr.Meta{
 			Key:      expr.MetaKeyOIFNAME,
@@ -809,7 +819,7 @@ func dropDeviceInternet(mac net.HardwareAddr) []expr.Any {
 			DestRegister: 1,
 			Base:         expr.PayloadBaseLLHeader,
 			Offset:       6,
-			Len:          6,
+			Len:          nftables.TypeEtherAddr.Bytes,
 		},
 		// [ cmp eq reg 1 0x5af07f68 0x0000dd92 ]
 		&expr.Cmp{
@@ -920,6 +930,154 @@ type HardwareAddressBlocks struct {
 	Blocks []HardwareAddressBlock
 }
 
+func NewEntry(ip net.IP, port uint16, verdict expr.VerdictKind) nftables.SetElement {
+	k := make([]byte, 0, 20)
+	k = append(k, ip.To16()...)
+	k = append(k, binaryutil.BigEndian.PutUint16(port)...)
+	return nftables.SetElement{
+		Key:         k,
+		VerdictData: &expr.Verdict{Kind: verdict},
+		Timeout:     time.Minute * 5, // TODO: should we sync this with ipv6.portforwardings.json
+	}
+}
+
+func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
+	set, err := c.GetSetByName(table, "ipv6Allow")
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "ipv6.portforwardings.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	// We want these to be temporary
+	// We currently allow nftables to automatically evict elements after 5 minutes
+	// So we don't flush the set but we do remove the json file
+	os.Remove(filepath.Join(dir, "ipv6.portforwardings.json"))
+	var cfg IPv6PortForwardings
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	elements := make([]nftables.SetElement, 0, len(cfg.IPv6PortForwardings))
+	for _, addr := range cfg.IPv6PortForwardings {
+		elements = append(elements, NewEntry(net.IP(addr.Addr().AsSlice()), addr.Port(), expr.VerdictAccept))
+	}
+	c.AddSet(set, elements)
+	return nil
+}
+
+func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
+	set := &nftables.Set{
+		Table:         table,
+		Name:          "ipv6allow",
+		IsMap:         true,
+		Concatenation: true,
+		KeyType:       nftables.MustConcatSetType(nftables.TypeIP6Addr, nftables.TypeInetService),
+		DataType:      nftables.TypeVerdict,
+	}
+	err := c.AddSet(set, nil)
+	if err != nil {
+		return err
+	}
+	// [ meta load nfproto => reg 1 ]
+	// [ cmp eq reg 1 0x00000002 ]
+
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			// [ meta load l4proto => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			// [ cmp eq reg 1 0x00000006 ]
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
+
+			// ip6 daddr
+			// [ payload load 16b @ network header + 24 => reg 1 ]
+			&expr.Payload{
+				DestRegister: unix.NFT_REG_1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       24,
+				Len:          nftables.TypeIP6Addr.Bytes,
+			},
+			// tcp dport
+			// [ payload load 2b @ transport header + 2 => reg 2 ]
+			&expr.Payload{
+				DestRegister: unix.NFT_REG_2,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       2,
+				Len:          nftables.TypeInetService.Bytes,
+			},
+			// [ lookup reg 1 set allowed_ipv6_ports ]
+			&expr.Lookup{
+				SourceRegister: unix.NFT_REG_1,
+				DestRegister:   unix.NFT_REG_VERDICT,
+				IsDestRegSet:   true,
+				SetName:        set.Name,
+				SetID:          set.ID,
+			},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
+			// tcp dport
+			&expr.Payload{
+				DestRegister: unix.NFT_REG_1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       2,
+				Len:          nftables.TypeInetService.Bytes,
+			},
+			&expr.Cmp{
+				Register: unix.NFT_REG_1,
+				Op:       expr.CmpOpEq,
+				Data:     binaryutil.BigEndian.PutUint16(80),
+			},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_TCP}},
+			// tcp dport
+			&expr.Payload{
+				DestRegister: unix.NFT_REG_1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       2,
+				Len:          nftables.TypeInetService.Bytes,
+			},
+			&expr.Cmp{
+				Register: unix.NFT_REG_1,
+				Op:       expr.CmpOpEq,
+				Data:     binaryutil.BigEndian.PutUint16(443),
+			},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Verdict{
+				Kind: expr.VerdictDrop,
+			},
+		},
+	})
+	return nil
+}
+
 func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nftables.Chain) error {
 	b, err := os.ReadFile(filepath.Join(dir, "hardwareaddress_block.json"))
 	if err != nil {
@@ -931,15 +1089,6 @@ func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nfta
 	var cfg HardwareAddressBlocks
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return err
-	}
-
-	lan0ip, err := LinkAddress(dir, "lan0")
-	if err != nil {
-		return err
-	}
-	lan0ip = lan0ip.To4()
-	if got, want := len(lan0ip), net.IPv4len; got != want {
-		return fmt.Errorf("lan0 does not have an IPv4 address configured: len %d != %d", got, want)
 	}
 
 	for _, fw := range cfg.Blocks {
@@ -1004,7 +1153,7 @@ func hairpinDNAT() []expr.Any {
 		&expr.Bitwise{
 			DestRegister:   1,
 			SourceRegister: 1,
-			Len:            4,
+			Len:            nftables.TypeCTStatus.Bytes,
 			Mask:           []byte{0x20, 0x00, 0x00, 0x00},
 			Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 		},
@@ -1023,6 +1172,7 @@ func hairpinDNAT() []expr.Any {
 const (
 	pfChain     = "router7-portforwardings"
 	mbChain     = "router7-ha-block"
+	ipv6Chain   = "router7-ipv6-allow"
 	natTable    = "router7-nat"
 	filterTable = "router7-filter"
 )
@@ -1072,7 +1222,86 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 		return fmt.Errorf("fail to apply blocks: %w", err)
 	}
 
+	allowChain, err := c.ListChain(nat, ipv6Chain)
+	if err != nil {
+		fmt.Println(fmt.Errorf("unable to find chain %s: %w", mbChain, err))
+		return nil
+	}
+
+	c.FlushChain(allowChain)
+	if err := applyIPV6Allow(dir, c, nat, allowChain); err != nil {
+		fmt.Println(fmt.Errorf("fail to setup ipv6 filter: %w", err))
+		return nil
+	}
+	err = c.Flush()
+	if err != nil {
+		fmt.Println(fmt.Errorf("fail to apply ipv6 filter: %w", err))
+		return nil
+	}
+
 	return nil
+}
+
+func applyCTState(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, counterName string) {
+	allowExpr := []expr.Any{
+		&expr.Ct{
+			Register: 1,
+			Key:      expr.CtKeySTATE,
+		},
+		&expr.Bitwise{
+			SourceRegister: 1,
+			DestRegister:   1,
+			Len:            nftables.TypeCTState.Bytes,
+			Mask:           binaryutil.NativeEndian.PutUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED),
+			Xor:            binaryutil.NativeEndian.PutUint32(0),
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     binaryutil.NativeEndian.PutUint32(0),
+		},
+	}
+	if counterName != "" {
+		allowExpr = append(allowExpr, &expr.Objref{
+			Type: unix.NFT_OBJECT_COUNTER,
+			Name: "fwded",
+		})
+	}
+	allowExpr = append(allowExpr, &expr.Verdict{
+		Kind: expr.VerdictAccept,
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: allowExpr,
+	})
+
+	// ct state invalid drop
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Ct{
+				Register: 1,
+				Key:      expr.CtKeySTATE,
+			},
+			&expr.Bitwise{
+				SourceRegister: 1,
+				DestRegister:   1,
+				Len:            nftables.TypeCTState.Bytes,
+				Mask:           binaryutil.NativeEndian.PutUint32(expr.CtStateBitINVALID),
+				Xor:            binaryutil.NativeEndian.PutUint32(0),
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     binaryutil.NativeEndian.PutUint32(0),
+			},
+			&expr.Verdict{
+				Kind: expr.VerdictDrop,
+			},
+		},
+	})
 }
 
 func applyFirewall(dir, ifname string) error {
@@ -1166,6 +1395,20 @@ func applyFirewall(dir, ifname string) error {
 		return err
 	}
 
+	ipv6 := c.AddChain(&nftables.Chain{
+		Name:  ipv6Chain,
+		Table: filter,
+		Type:  nftables.ChainTypeFilter,
+	})
+
+	if err := setupIPV6Filter(dir, c, filter, ipv6); err != nil {
+		fmt.Printf("Failed to setup ipv6 firewall: %v\n",err)
+	}
+
+	if err := applyIPV6Allow(dir, c, filter, ipv6); err != nil {
+		fmt.Printf("Failed to apply ipv6 firewall: %v\n",err)
+	}
+
 	forward := c.AddChain(&nftables.Chain{
 		Name:     "forward",
 		Hooknum:  nftables.ChainHookForward,
@@ -1173,6 +1416,14 @@ func applyFirewall(dir, ifname string) error {
 		Table:    filter,
 		Type:     nftables.ChainTypeFilter,
 	})
+
+	counterObj := getCounterObj(c, &nftables.CounterObj{
+		Table: filter,
+		Name:  "fwded",
+	})
+	counter := c.AddObj(counterObj).(*nftables.CounterObj)
+
+	applyCTState(c, filter, forward, counter.Name)
 
 	c.AddRule(&nftables.Rule{
 		Table: filter,
@@ -1185,6 +1436,41 @@ func applyFirewall(dir, ifname string) error {
 		},
 	})
 
+	c.AddRule(&nftables.Rule{
+		Table: filter,
+		Chain: forward,
+		Exprs: []expr.Any{
+			&expr.Meta{
+				Key:      expr.MetaKeyNFPROTO,
+				Register: 1,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.NFPROTO_IPV6},
+			},
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			// [ cmp eq reg 1 0x306e616c 0x00000000 0x00000000 0x00000000 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     nfifname(ifname),
+			},
+
+			// [ meta load oifname => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			// [ cmp eq reg 1 0x306e616c 0x00000000 0x00000000 0x00000000 ]
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     nfifname("lan0"),
+			},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ipv6Chain,
+			},
+		},
+	})
 	c.AddRule(&nftables.Rule{
 		Table: filter,
 		Chain: forward,
@@ -1218,7 +1504,7 @@ func applyFirewall(dir, ifname string) error {
 			&expr.Bitwise{
 				DestRegister:   1,
 				SourceRegister: 1,
-				Len:            1,
+				Len:            nftables.TypeTCPFlag.Bytes,
 				Mask:           []byte{0x02},
 				Xor:            []byte{0x00},
 			},
@@ -1245,7 +1531,7 @@ func applyFirewall(dir, ifname string) error {
 			// [ exthdr write tcpopt reg 1 => 2b @ 2 + 2 ]
 			&expr.Exthdr{
 				SourceRegister: 1,
-				Type:           2, // TODO
+				Type:           unix.NFTA_EXTHDR_TYPE,
 				Offset:         2,
 				Len:            2,
 				Op:             expr.ExthdrOpTcpopt,
@@ -1253,20 +1539,13 @@ func applyFirewall(dir, ifname string) error {
 		},
 	})
 
-	counterObj := getCounterObj(c, &nftables.CounterObj{
-		Table: filter,
-		Name:  "fwded",
-	})
-	counter := c.AddObj(counterObj).(*nftables.CounterObj)
-
-	const NFT_OBJECT_COUNTER = 1 // TODO: get into x/sys/unix
 	c.AddRule(&nftables.Rule{
 		Table: filter,
 		Chain: forward,
 		Exprs: []expr.Any{
 			// [ counter name fwded ]
 			&expr.Objref{
-				Type: NFT_OBJECT_COUNTER,
+				Type: unix.NFT_OBJECT_COUNTER,
 				Name: counter.Name,
 			},
 		},
@@ -1291,7 +1570,7 @@ func applyFirewall(dir, ifname string) error {
 		Exprs: []expr.Any{
 			// [ counter name input ]
 			&expr.Objref{
-				Type: NFT_OBJECT_COUNTER,
+				Type: unix.NFT_OBJECT_COUNTER,
 				Name: counter.Name,
 			},
 		},
@@ -1316,7 +1595,7 @@ func applyFirewall(dir, ifname string) error {
 		Exprs: []expr.Any{
 			// [ counter name output ]
 			&expr.Objref{
-				Type: NFT_OBJECT_COUNTER,
+				Type: unix.NFT_OBJECT_COUNTER,
 				Name: counter.Name,
 			},
 		},

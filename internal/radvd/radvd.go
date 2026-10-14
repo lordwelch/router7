@@ -17,12 +17,14 @@ package radvd
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,14 +46,15 @@ type Server struct {
 	prefixes []net.IPNet
 	iface    *net.Interface
 
-	knownAddresses map[string]dhcp4d.Lease
+	knownAddresses map[string][]dhcp4d.Lease
 }
 
 func NewServer() (*Server, error) {
 	return &Server{
-		knownAddresses: make(map[string]dhcp4d.Lease),
+		knownAddresses: make(map[string][]dhcp4d.Lease),
 	}, nil
 }
+
 func getLeases() (map[string]string, error) {
 	f, err := os.Open("/perm/dhcp4d/leases.json")
 	if err != nil {
@@ -72,18 +75,28 @@ func getLeases() (map[string]string, error) {
 	return byMac, nil
 }
 
+func (s *Server) expireLeases() {
+	now := time.Now().Round(time.Second).Add(5)
+	for hwAddr, leases := range s.knownAddresses {
+		s.knownAddresses[hwAddr] = slices.DeleteFunc(leases, func(l dhcp4d.Lease) bool { return l.Expiry.Before(now) })
+	}
+}
+
+func (s *Server) addKnownLeases(hwAddr string, lease dhcp4d.Lease) {
+	leases := s.knownAddresses[hwAddr]
+	leases = append(leases, lease)
+	slices.SortFunc(leases, func(a, b dhcp4d.Lease) int {
+		// fe80 aka link local addresses will always sort last so we reverse the condition
+		// we want link local first so that ipv6 will resolve to local addresses especially
+		// since gokrazy only listens on private addresses
+		return cmp.Compare(a.Addr.String(), b.Addr.String()) * -1
+	})
+	s.knownAddresses[hwAddr] = slices.CompactFunc(leases, func(a, b dhcp4d.Lease) bool { return a.Addr.String() == b.Addr.String() })
+}
+
 func (s *Server) UpdateDNS(b []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	leases, err := getLeases()
-	if err == nil {
-		for _, address := range s.knownAddresses {
-			if address.Hostname != "" {
-				continue
-			}
-			address.Hostname = leases[address.HardwareAddr]
-		}
-	}
 	m, err := ndp.ParseMessage(b)
 	if err != nil {
 		return err
@@ -107,24 +120,37 @@ func (s *Server) UpdateDNS(b []byte) error {
 	}
 	if !n.Solicited {
 		// Ignore advertisements that are not solicited
-		log.Printf("Ignoring advertisement(is not solicited): %v", n)
+		log.Printf("Ignoring advertisement(not solicited): %v", n)
 		return nil
+	}
+	leases, err := getLeases()
+	if err == nil {
+		for _, knownLeases := range s.knownAddresses {
+			for _, lease := range knownLeases {
+				if lease.Hostname != "" {
+					continue
+				}
+				lease.Hostname = leases[lease.HardwareAddr]
+			}
+		}
 	}
 	if _, ok := leases[hw.String()]; !ok {
 		log.Println("Ignoring advertisement(no dhcp4 lease for mac):", n)
 		return nil
 	}
 	log.Printf("Found IPv6 address %s for MAC address %s (%s)", n.TargetAddress, hw, leases[hw.String()])
-	s.knownAddresses[hw.String()] = dhcp4d.Lease{
+	s.addKnownLeases(hw.String(), dhcp4d.Lease{
 		Addr:         net.IP(n.TargetAddress.AsSlice()),
 		HardwareAddr: hw.String(),
 		LastACK:      time.Now(),
 		Expiry:       time.Now().Add(10 * time.Minute),
 		Hostname:     leases[hw.String()],
-	}
-	addresses := make([]dhcp4d.Lease, 0, len(s.knownAddresses))
-	for _, lease := range s.knownAddresses {
-		addresses = append(addresses, lease)
+	})
+	addresses := make([]dhcp4d.Lease, 0, len(s.knownAddresses)*2)
+	for _, knownLeases := range s.knownAddresses {
+		for _, lease := range knownLeases {
+			addresses = append(addresses, lease)
+		}
 	}
 	buf := &bytes.Buffer{}
 	j := json.NewEncoder(buf)
@@ -198,9 +224,11 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 			return err
 		}
 		if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement {
-			err = s.UpdateDNS(buf[:n])
-			if err != nil {
-				log.Printf("Failed to update dns %v %#v", err, buf[:n])
+			if a, ok := addr.(*net.IPAddr); ok && ipv6LinkLocal.Contains(a.IP) {
+				err = s.UpdateDNS(buf[:n])
+				if err != nil {
+					log.Printf("Failed to update dns %v %#v", err, buf[:n])
+				}
 			}
 			continue
 		}
@@ -224,7 +252,7 @@ func (s *Server) ListenAndServe(ifname string) error {
 	// TODO(correctness): would it be better to listen on
 	// net.IPv6linklocalallrouters? Just specifying that results in an error,
 	// though.
-	conn, err := net.ListenIP("ip6:ipv6-icmp", &net.IPAddr{net.IPv6unspecified, ""})
+	conn, err := net.ListenIP("ip6:ipv6-icmp", &net.IPAddr{IP: net.IPv6unspecified, Zone: ""})
 	if err != nil {
 		return err
 	}
@@ -290,7 +318,8 @@ func (s *Server) sendAdvertisement(addr net.Addr) error {
 		})
 	}
 
-	options = append(options,
+	options = append(
+		options,
 		&ndp.DNSSearchList{
 			// TODO: audit all lifetimes and express them in relation to each other
 			Lifetime: 20 * time.Minute,
