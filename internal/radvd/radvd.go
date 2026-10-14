@@ -76,7 +76,7 @@ func getLeases() (map[string]string, error) {
 }
 
 func (s *Server) expireLeases() {
-	now := time.Now().Round(time.Second).Add(time.Minute)
+	now := time.Now().Round(time.Second).Add(time.Second)
 	for hwAddr, leases := range s.knownAddresses {
 		s.knownAddresses[hwAddr] = slices.DeleteFunc(leases, func(l dhcp4d.Lease) bool { return l.Expiry.Before(now) })
 	}
@@ -89,7 +89,7 @@ func (s *Server) addKnownLeases(hwAddr string, lease dhcp4d.Lease) {
 		// fe80 aka link local addresses will always sort last so we reverse the condition
 		// we want link local first so that ipv6 will resolve to local addresses especially
 		// since gokrazy only listens on private addresses
-		return cmp.Compare(a.Addr.String(), b.Addr.String()) * -1
+		return cmp.Or(cmp.Compare(a.Addr.String(), b.Addr.String()), a.Expiry.Compare(b.Expiry)*-1)
 	})
 	s.knownAddresses[hwAddr] = slices.CompactFunc(leases, func(a, b dhcp4d.Lease) bool { return a.Addr.String() == b.Addr.String() })
 }
