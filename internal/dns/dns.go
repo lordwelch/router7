@@ -199,17 +199,17 @@ func (ip IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
 			re = append(re, r)
 		}
 	}
-	if ip.IPv6 != nil {
-		for _, IPv6 := range ip.IPv6 {
-			r, err = dns.NewRR(name + " 3600 IN AAAA " + IPv6.String())
-			if err != nil {
-				panic(err)
-			}
-			if qtype == dns.TypeAAAA {
-				rr = append(rr, r)
-			} else {
-				re = append(re, r)
-			}
+	for _, IPv6 := range ip.IPv6 {
+		dnsStr := name + " 3600 IN AAAA " + IPv6.String()
+		r, err = dns.NewRR(dnsStr)
+		if err != nil {
+			fmt.Println("Failed to serialize ipv6 dns record:", dnsStr)
+			panic(err)
+		}
+		if qtype == dns.TypeAAAA {
+			rr = append(rr, r)
+		} else {
+			re = append(re, r)
 		}
 	}
 	return rr, re
