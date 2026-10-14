@@ -145,7 +145,7 @@ func (s *Server) UpdateDNS(b []byte) error {
 		Addr:         net.IP(n.TargetAddress.AsSlice()),
 		HardwareAddr: hw.String(),
 		LastACK:      now,
-		Expiry:       now.Add(10 * time.Minute),
+		Expiry:       now.Add(30 * time.Minute), // This matches RouterLifetime below
 		Hostname:     leases[hw.String()],
 	})
 	addresses := make([]dhcp4d.Lease, 0, len(s.knownAddresses)*2)
