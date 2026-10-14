@@ -965,7 +965,7 @@ func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *
 	for _, addr := range cfg.IPv6PortForwardings {
 		elements = append(elements, NewEntry(net.IP(addr.Addr().AsSlice()), addr.Port(), expr.VerdictAccept))
 	}
-	c.AddSet(set, elements)
+	c.SetAddElements(set, elements)
 	return nil
 }
 
