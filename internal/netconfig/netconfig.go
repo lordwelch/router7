@@ -944,14 +944,14 @@ func NewEntry(ip net.IP, port uint16, verdict expr.VerdictKind) nftables.SetElem
 func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
 	set, err := c.GetSetByName(table, "ipv6Allow")
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to find ipv6Allow map:",err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "ipv6.portforwardings.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return err // TODO: should this be an error
 	}
 	// We want these to be temporary
 	// We currently allow nftables to automatically evict elements after 5 minutes
@@ -959,7 +959,7 @@ func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *
 	os.Remove(filepath.Join(dir, "ipv6.portforwardings.json"))
 	var cfg IPv6PortForwardings
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return err
+		return fmt.Errorf("invalid json in ipv6.portforwardings.json: %v",err)
 	}
 	elements := make([]nftables.SetElement, 0, len(cfg.IPv6PortForwardings))
 	for _, addr := range cfg.IPv6PortForwardings {
@@ -980,7 +980,7 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 	}
 	err := c.AddSet(set, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create the map ipv6allow: %v",err)
 	}
 	// [ meta load nfproto => reg 1 ]
 	// [ cmp eq reg 1 0x00000002 ]
@@ -1224,7 +1224,7 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 
 	allowChain, err := c.ListChain(nat, ipv6Chain)
 	if err != nil {
-		fmt.Println(fmt.Errorf("unable to find chain %s: %w", mbChain, err))
+		fmt.Println(fmt.Errorf("unable to find chain %s: %w", ipv6Chain, err))
 		return nil
 	}
 
