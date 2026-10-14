@@ -641,7 +641,7 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 	}
 	// First entry wins, so we order by expiration descendingly to put the
 	// newest entry for any given name into s.hostsByName.
-	sort.Slice(leases, func(i, j int) bool {
+	sort.SliceStable(leases, func(i, j int) bool {
 		return !leases[i].Expiry.Before(leases[j].Expiry)
 	})
 	for _, l := range leases {
