@@ -138,12 +138,13 @@ func (s *Server) UpdateDNS(b []byte) error {
 		log.Println("Ignoring advertisement(no dhcp4 lease for mac):", n)
 		return nil
 	}
+	now := time.Now().Round(time.Minute)
 	log.Printf("Found IPv6 address %s for MAC address %s (%s)", n.TargetAddress, hw, leases[hw.String()])
 	s.addKnownLeases(hw.String(), dhcp4d.Lease{
 		Addr:         net.IP(n.TargetAddress.AsSlice()),
 		HardwareAddr: hw.String(),
-		LastACK:      time.Now(),
-		Expiry:       time.Now().Add(10 * time.Minute),
+		LastACK:      now,
+		Expiry:       now.Add(10 * time.Minute),
 		Hostname:     leases[hw.String()],
 	})
 	addresses := make([]dhcp4d.Lease, 0, len(s.knownAddresses)*2)
