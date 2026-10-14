@@ -76,7 +76,7 @@ func getLeases() (map[string]string, error) {
 }
 
 func (s *Server) expireLeases() {
-	now := time.Now().Round(time.Second).Add(5)
+	now := time.Now().Round(time.Second).Add(time.Minute)
 	for hwAddr, leases := range s.knownAddresses {
 		s.knownAddresses[hwAddr] = slices.DeleteFunc(leases, func(l dhcp4d.Lease) bool { return l.Expiry.Before(now) })
 	}
@@ -97,6 +97,7 @@ func (s *Server) addKnownLeases(hwAddr string, lease dhcp4d.Lease) {
 func (s *Server) UpdateDNS(b []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.expireLeases()
 	m, err := ndp.ParseMessage(b)
 	if err != nil {
 		return err
