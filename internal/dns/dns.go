@@ -200,6 +200,9 @@ func (ip IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
 		}
 	}
 	for _, IPv6 := range ip.IPv6 {
+		if IPv6 == nil {
+			continue
+		}
 		dnsStr := name + " 3600 IN AAAA " + IPv6.String()
 		r, err = dns.NewRR(dnsStr)
 		if err != nil {
