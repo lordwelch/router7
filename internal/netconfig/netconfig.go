@@ -942,11 +942,7 @@ func NewEntry(ip net.IP, port uint16, verdict expr.VerdictKind) nftables.SetElem
 	}
 }
 
-func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
-	set, err := c.GetSetByName(table, "ipv6Allow")
-	if err != nil {
-		return fmt.Errorf("unable to find ipv6Allow map:",err)
-	}
+func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, set *nftables.Set) error {
 	b, err := os.ReadFile(filepath.Join(dir, "ipv6.portforwardings.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -960,7 +956,7 @@ func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *
 	os.Remove(filepath.Join(dir, "ipv6.portforwardings.json"))
 	var cfg IPv6PortForwardings
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return fmt.Errorf("invalid json in ipv6.portforwardings.json: %v",err)
+		return fmt.Errorf("invalid json in ipv6.portforwardings.json: %v", err)
 	}
 	elements := make([]nftables.SetElement, 0, len(cfg.IPv6PortForwardings))
 	for _, addr := range cfg.IPv6PortForwardings {
@@ -970,7 +966,7 @@ func applyIPV6Allow(dir string, c *nftables.Conn, table *nftables.Table, chain *
 	return nil
 }
 
-func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) error {
+func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain *nftables.Chain) (*nftables.Set, error) {
 	set := &nftables.Set{
 		Table:         table,
 		Name:          "ipv6allow",
@@ -981,7 +977,7 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 	}
 	err := c.AddSet(set, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create the map ipv6allow: %v", err)
+		return nil, fmt.Errorf("failed to create the map ipv6allow: %v", err)
 	}
 
 	c.AddRule(&nftables.Rule{
@@ -1109,7 +1105,7 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 			},
 		},
 	})
-	return nil
+	return set, nil
 }
 
 func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nftables.Chain) error {
@@ -1263,7 +1259,11 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 	}
 
 	c.FlushChain(allowChain)
-	if err := applyIPV6Allow(dir, c, nat, allowChain); err != nil {
+	set, err := c.GetSetByName(nat, "ipv6Allow")
+	if err != nil {
+		return fmt.Errorf("unable to find ipv6Allow map: %w", err)
+	}
+	if err := applyIPV6Allow(dir, c, nat, set); err != nil {
 		fmt.Println(fmt.Errorf("fail to setup ipv6 filter: %w", err))
 		return nil
 	}
@@ -1435,12 +1435,13 @@ func applyFirewall(dir, ifname string) error {
 		Type:  nftables.ChainTypeFilter,
 	})
 
-	if err := setupIPV6Filter(dir, c, filter, ipv6); err != nil {
-		fmt.Printf("Failed to setup ipv6 firewall: %v\n",err)
+	set, err := setupIPV6Filter(dir, c, filter, ipv6)
+	if err != nil {
+		fmt.Printf("Failed to setup ipv6 firewall: %v\n", err)
 	}
 
-	if err := applyIPV6Allow(dir, c, filter, ipv6); err != nil {
-		fmt.Printf("Failed to apply ipv6 firewall: %v\n",err)
+	if err := applyIPV6Allow(dir, c, filter, set); err != nil {
+		fmt.Printf("Failed to apply ipv6 firewall: %v\n", err)
 	}
 
 	forward := c.AddChain(&nftables.Chain{
