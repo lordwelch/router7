@@ -193,7 +193,6 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 	var filter ipv6.ICMPFilter
 	filter.SetAll(true)
 	filter.Accept(ipv6.ICMPTypeRouterSolicitation)
-	filter.Accept(ipv6.ICMPTypeNeighborAdvertisement)
 	if err := s.pc.SetICMPFilter(&filter); err != nil {
 		return err
 	}
