@@ -34,6 +34,7 @@ import (
 	"github.com/rtr7/router7/internal/dhcp4d"
 	"github.com/rtr7/router7/internal/diag"
 	"github.com/rtr7/router7/internal/notify"
+	"github.com/vishvananda/netlink"
 
 	"golang.org/x/net/ipv6"
 )
@@ -94,29 +95,20 @@ func (s *Server) addKnownLeases(hwAddr string, lease dhcp4d.Lease) {
 	s.knownAddresses[hwAddr] = slices.CompactFunc(leases, func(a, b dhcp4d.Lease) bool { return a.Addr.String() == b.Addr.String() })
 }
 
-func (s *Server) UpdateDNS(b []byte) error {
+func (s *Server) UpdateDNS(u netlink.NeighUpdate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeases()
-	m, err := ndp.ParseMessage(b)
-	if err != nil {
-		return err
+	if u.State&netlink.NUD_REACHABLE == 0 {
+		return fmt.Errorf("neighbor %s is not reachable (state %#x)", u.IP, u.State)
 	}
-	if m.Type() != ipv6.ICMPTypeNeighborAdvertisement {
-		return fmt.Errorf("incorrect icmp message recieved expected %s, got %s", ipv6.ICMPTypeNeighborAdvertisement, m.Type())
+	if u.IP.IsLinkLocalUnicast() || u.IP.IsMulticast() {
+		return nil
 	}
-	n := m.(*ndp.NeighborAdvertisement)
-	var hw net.HardwareAddr
-	for _, o := range n.Options {
-		if o.Code() == uint8(ndp.Target) {
-			ll := o.(*ndp.LinkLayerAddress)
-			hw = ll.Addr
-			break
-		}
-	}
-	if hw == nil {
-		// Ignore advertisements that donot provide the MAC
-		log.Printf("Ignoring advertisement(no mac): %v", n)
+	hw := u.HardwareAddr
+	if len(hw) == 0 {
+		// Ignore updates that do not provide the MAC
+		log.Printf("Ignoring neighbor update(no mac): %v", u.IP)
 		return nil
 	}
 	leases, err := getLeases()
@@ -131,13 +123,13 @@ func (s *Server) UpdateDNS(b []byte) error {
 		}
 	}
 	if _, ok := leases[hw.String()]; !ok {
-		log.Println("Ignoring advertisement(no dhcp4 lease for mac):", n)
+		log.Println("Ignoring neighbor update(no dhcp4 lease for mac):", u.IP)
 		return nil
 	}
 	now := time.Now().Round(time.Minute)
-	log.Printf("Found IPv6 address %s for MAC address %s (%s)", n.TargetAddress, hw, leases[hw.String()])
+	log.Printf("Found IPv6 address %s for MAC address %s (%s)", u.IP, hw, leases[hw.String()])
 	s.addKnownLeases(hw.String(), dhcp4d.Lease{
-		Addr:         net.IP(n.TargetAddress.AsSlice()),
+		Addr:         u.IP,
 		HardwareAddr: hw.String(),
 		LastACK:      now,
 		Expiry:       now.Add(30 * time.Minute), // This matches RouterLifetime below
@@ -205,6 +197,33 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 		return err
 	}
 
+	updates := make(chan netlink.NeighUpdate, 10)
+
+	go func() {
+		for neigh := range updates {
+			err = s.UpdateDNS(neigh)
+			if err != nil {
+				log.Printf("Failed to update dns %v %#v", err, neigh)
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			for _, leases := range s.knownAddresses {
+				for _, l := range leases {
+					netlink.NeighSet(&netlink.Neigh{
+						LinkIndex: s.iface.Index,
+						Family:    syscall.AF_INET6,
+						IP:        l.Addr,
+						Flags:     netlink.NTF_USE,
+					})
+				}
+			}
+			time.Sleep(30 * time.Minute)
+		}
+	}()
+
 	go func() {
 		for {
 			s.sendAdvertisement(nil) // TODO: handle error
@@ -219,15 +238,6 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 		n, _, addr, err := s.pc.ReadFrom(buf)
 		if err != nil {
 			return err
-		}
-		if ipv6.ICMPType(buf[0]) == ipv6.ICMPTypeNeighborAdvertisement {
-			if a, ok := addr.(*net.IPAddr); ok && ipv6LinkLocal.Contains(a.IP) {
-				err = s.UpdateDNS(buf[:n])
-				if err != nil {
-					log.Printf("Failed to update dns %v %#v", err, buf[:n])
-				}
-			}
-			continue
 		}
 		if !strings.HasSuffix(addr.String(), "%"+ifname) {
 			log.Println("ignoring off-interface request from", addr.String())
