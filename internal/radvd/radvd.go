@@ -119,11 +119,6 @@ func (s *Server) UpdateDNS(b []byte) error {
 		log.Printf("Ignoring advertisement(no mac): %v", n)
 		return nil
 	}
-	if !n.Solicited {
-		// Ignore advertisements that are not solicited
-		log.Printf("Ignoring advertisement(not solicited): %v", n)
-		return nil
-	}
 	leases, err := getLeases()
 	if err == nil {
 		for _, knownLeases := range s.knownAddresses {
