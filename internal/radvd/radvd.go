@@ -102,11 +102,11 @@ func (s *Server) UpdateDNS(u netlink.NeighUpdate) error {
 	if u.State&(netlink.NUD_INCOMPLETE|netlink.NUD_PROBE|netlink.NUD_DELAY|netlink.NUD_STALE) != 0 {
 		return nil
 	}
-	if u.State&netlink.NUD_REACHABLE == 0 {
-		return fmt.Errorf("neighbor %s is not reachable (state %#x)", u.IP, u.State)
-	}
 	if u.IP.IsLinkLocalUnicast() || u.IP.IsMulticast() {
 		return nil
+	}
+	if u.State&netlink.NUD_REACHABLE == 0 {
+		return fmt.Errorf("neighbor %s is not reachable (state %#x)", u.IP, u.State)
 	}
 	hw := u.HardwareAddr
 	if len(hw) == 0 {
@@ -276,6 +276,7 @@ func (s *Server) ListenAndServe(ifname string) error {
 }
 
 var ipv6LinkLocal = diag.MustParseCIDR("fe80::/10")
+var ipv6ULA = diag.MustParseCIDR("fc00::/7")
 
 func (s *Server) sendAdvertisement(addr net.Addr) error {
 	s.mu.Lock()
@@ -297,25 +298,40 @@ func (s *Server) sendAdvertisement(addr net.Addr) error {
 		if err != nil {
 			return err
 		}
-		var linkLocal netip.Addr
+		var linkLocal, ula netip.Addr
 		for _, addr := range addrs {
 			ipnet, ok := addr.(*net.IPNet)
 			if !ok {
 				continue
 			}
-			if ipv6LinkLocal.Contains(ipnet.IP) {
-				linkLocal, _ = netip.AddrFromSlice(ipnet.IP)
+			switch {
+			case ipv6ULA.Contains(ipnet.IP):
+				if !ula.IsValid() {
+					ula, _ = netip.AddrFromSlice(ipnet.IP)
+				}
+			case ipv6LinkLocal.Contains(ipnet.IP):
+				if !linkLocal.IsValid() {
+					linkLocal, _ = netip.AddrFromSlice(ipnet.IP)
+				}
+			}
+			if ula.IsValid() && linkLocal.IsValid() {
 				break
 			}
 		}
+		var servers []netip.Addr
+		if ula.IsValid() && !ula.IsUnspecified() {
+			servers = append(servers, ula)
+		}
 		if linkLocal.IsValid() && !linkLocal.IsUnspecified() {
+			servers = append(servers, linkLocal)
+		}
+		if len(servers) > 0 {
 			options = append(options, &ndp.RecursiveDNSServer{
 				Lifetime: 30 * time.Minute,
-				Servers:  []netip.Addr{linkLocal},
+				Servers:  servers,
 			})
 		}
 	}
-
 	for _, prefix := range s.prefixes {
 		ones, _ := prefix.Mask.Size()
 		// Use the first /64 subnet within larger prefixes
