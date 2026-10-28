@@ -111,6 +111,7 @@ func (s *Server) UpdateDNS(u netlink.NeighUpdate) error {
 		log.Printf("Ignoring neighbor update(no mac): %v", u.IP)
 		return nil
 	}
+	log.Printf("Updating dns: %v", u)
 	leases, err := getLeases()
 	if err == nil {
 		for _, knownLeases := range s.knownAddresses {
@@ -207,6 +208,9 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 			}
 		}
 	}()
+	if err := netlink.NeighSubscribe(updates, nil); err != nil {
+		log.Printf("Failed to listen for ipv6 neighbor updates %v", err)
+	}
 
 	go func() {
 		for {
