@@ -99,6 +99,9 @@ func (s *Server) UpdateDNS(u netlink.NeighUpdate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLeases()
+	if u.State&(netlink.NUD_INCOMPLETE|netlink.NUD_PROBE|netlink.NUD_DELAY) != 0 {
+		return nil
+	}
 	if u.State&netlink.NUD_REACHABLE == 0 {
 		return fmt.Errorf("neighbor %s is not reachable (state %#x)", u.IP, u.State)
 	}
