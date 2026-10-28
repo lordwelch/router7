@@ -652,7 +652,7 @@ func (s *Server) SetLeases(leases []dhcp4d.Lease) {
 			continue
 		}
 		lower := strings.ToLower(l.Hostname)
-		if ip, ok := s.hostsByName[lcHostname(lower)]; ok && ((ipType(l.Addr) == 4 && ip.IPv4 != nil)) {
+		if ip, ok := s.hostsByName[lcHostname(lower)]; ok && (ipType(l.Addr) == 4 && ip.IPv4 != nil) {
 			continue // don’t overwrite e.g. the hostname entry, but allow a missing ipv4, ipv6 gets appended
 		}
 		_, err := idna.Registration.ToASCII(lower)
