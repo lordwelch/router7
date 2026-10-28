@@ -201,7 +201,7 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 
 	go func() {
 		for neigh := range updates {
-			if neigh.IP.To16() == nil {
+			if neigh.IP.To4() != nil {
 				continue
 			}
 			err = s.UpdateDNS(neigh)
