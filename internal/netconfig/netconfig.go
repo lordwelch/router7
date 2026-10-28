@@ -1108,7 +1108,7 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 	return set, nil
 }
 
-func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nftables.Chain) error {
+func applyHABlock(dir string, c *nftables.Conn, filter *nftables.Table, chain *nftables.Chain) error {
 	b, err := os.ReadFile(filepath.Join(dir, "hardwareaddress_block.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1127,7 +1127,7 @@ func applyHABlock(dir string, c *nftables.Conn, nat *nftables.Table, chain *nfta
 			continue
 		}
 		c.AddRule(&nftables.Rule{
-			Table: nat,
+			Table: filter,
 			Chain: chain,
 			Exprs: dropDeviceInternet(mac),
 		})
@@ -1252,18 +1252,18 @@ func updatePortforwardingsOnly(dir, ifname string) error {
 		return fmt.Errorf("fail to apply blocks: %w", err)
 	}
 
-	allowChain, err := c.ListChain(nat, ipv6Chain)
+	allowChain, err := c.ListChain(filter, ipv6Chain)
 	if err != nil {
 		fmt.Println(fmt.Errorf("unable to find chain %s: %w", ipv6Chain, err))
 		return nil
 	}
 
 	c.FlushChain(allowChain)
-	set, err := c.GetSetByName(nat, "ipv6Allow")
+	set, err := c.GetSetByName(filter, "ipv6Allow")
 	if err != nil {
 		return fmt.Errorf("unable to find ipv6Allow map: %w", err)
 	}
-	if err := applyIPV6Allow(dir, c, nat, set); err != nil {
+	if err := applyIPV6Allow(dir, c, filter, set); err != nil {
 		fmt.Println(fmt.Errorf("fail to setup ipv6 filter: %w", err))
 		return nil
 	}
