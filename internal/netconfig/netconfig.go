@@ -33,6 +33,7 @@ import (
 	"github.com/google/nftables/expr"
 	"github.com/mdlayher/ethtool"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 
 	"github.com/rtr7/router7/internal/dhcp4"
@@ -980,15 +981,17 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 	}
 	err := c.AddSet(set, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create the map ipv6allow: %v",err)
+		return fmt.Errorf("failed to create the map ipv6allow: %v", err)
 	}
-	// [ meta load nfproto => reg 1 ]
-	// [ cmp eq reg 1 0x00000002 ]
 
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
 		Exprs: []expr.Any{
+			// [ meta load nfproto => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+			// [ cmp eq reg 1 0x00000002 ]
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV6}},
 			// [ meta load l4proto => reg 1 ]
 			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 			// [ cmp eq reg 1 0x00000006 ]
@@ -1061,6 +1064,37 @@ func setupIPV6Filter(dir string, c *nftables.Conn, table *nftables.Table, chain 
 				Op:       expr.CmpOpEq,
 				Data:     binaryutil.BigEndian.PutUint16(443),
 			},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	})
+	// [ meta load nfproto => reg 1 ]
+	// [ cmp eq reg 1 0x0000000a ]
+
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			// [ meta load l4proto => reg 1 ]
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			// [ cmp eq reg 1 0x0000003a ]
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_ICMPV6}},
+
+			// [ payload load 1b @ transport header + 0 => reg 1 ]
+			&expr.Payload{
+				DestRegister: unix.NFT_REG_1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       0,
+				Len:          nftables.TypeICMP6Type.Bytes,
+			},
+			// [ cmp eq reg 1 0x00000080 ]
+			&expr.Cmp{
+				Register: unix.NFT_REG_1,
+				Op:       expr.CmpOpEq,
+				Data:     []byte{byte(ipv6.ICMPTypeEchoRequest)},
+			},
+			// [ immediate reg 0 accept ]
 			&expr.Verdict{
 				Kind: expr.VerdictAccept,
 			},
