@@ -111,7 +111,7 @@ func (s *Server) UpdateDNS(u netlink.NeighUpdate) error {
 		log.Printf("Ignoring neighbor update(no mac): %v", u.IP)
 		return nil
 	}
-	log.Printf("Updating dns: %v", u)
+
 	leases, err := getLeases()
 	if err == nil {
 		for _, knownLeases := range s.knownAddresses {
@@ -201,6 +201,9 @@ func (s *Server) Serve(ifname string, conn net.PacketConn) error {
 
 	go func() {
 		for neigh := range updates {
+			if neigh.IP.To16() == nil {
+				continue
+			}
 			err = s.UpdateDNS(neigh)
 			if err != nil {
 				log.Printf("Failed to update dns %v %#v", err, neigh)
