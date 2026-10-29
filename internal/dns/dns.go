@@ -17,6 +17,7 @@ package dns
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -199,6 +200,13 @@ func (ip IP) ToRRSet(name string, qtype uint16) ([]dns.RR, []dns.RR) {
 			re = append(re, r)
 		}
 	}
+	slices.SortFunc(ip.IPv6, func(a, b net.IP) int {
+		// fe80 aka link local addresses will always sort last so we reverse the condition
+		// we want link local first so that ipv6 will resolve to local addresses especially
+		// since gokrazy only listens on private addresses
+		return cmp.Compare(a.String(), b.String())*-1
+	})
+
 	for _, IPv6 := range ip.IPv6 {
 		if IPv6 == nil {
 			continue
